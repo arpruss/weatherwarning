@@ -90,7 +90,7 @@ void setup() {
   numEvents = 0;
   beeperState = BEEPER_OFF;
   lastUpdate = UNDEF_TIME;
-  curUpdateDelay = updateDelay;
+  curUpdateDelay = delayTime;
 
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(beeperPin, OUTPUT);
@@ -289,7 +289,7 @@ void monitorWeather() {
       Serial.println(String("Have ") + String(numEvents) + " events");
     }
     lastUpdateSuccess = millis();
-    curUpdateDelay = updateDelay;
+    curUpdateDelay = delayTime;
     updateInformation();
   }
   else {
