@@ -1,6 +1,6 @@
 #include <ESP8266WiFi.h>
 #include <WiFiClientSecure.h>
-#include "TinyXML.h"
+#include "quickparse.h"
 #include "sha1.h"
 #include <string.h>
 #include <ctype.h>
@@ -8,8 +8,6 @@
 #define memzero(p,n) memset((p),0,(n))
 
 uint32_t delayTime = 60000; // in milliseconds
-uint8_t xmlBuffer[1024];
-TinyXML xml;
 
 typedef enum {
    INFORM_NONE = 0,
@@ -43,6 +41,10 @@ typedef struct {
   uint8_t fresh;
 } EventInfo;
 
+static char tagBuffer[20];
+static char dataBuffer[MAX_SUMMARY+1];
+static void XML_callback( char* tagName, char* data, XMLEvent event);
+
 EventInfo events[MAX_EVENTS];
 EventInfo curEvent;
 int numEvents = 0;
@@ -68,8 +70,6 @@ void setup() {
 
   Serial.println(String("WeatherWarning connected as ")+String(WiFi.localIP()));
 
-  xml.init((uint8_t*)&xmlBuffer,sizeof(xmlBuffer),&XML_callback);
-
   numEvents = 0;
 }
 
@@ -84,7 +84,7 @@ void XML_reset() {
   inEntry = 0;
   gotFeed = 0;
   tooMany = 0;
-  xml.reset();
+  xmlParseInit(XML_callback, tagBuffer, sizeof(tagBuffer), dataBuffer, sizeof(dataBuffer));
 }
 
 void deleteEvent(int i) {
@@ -128,60 +128,54 @@ void storeEventIfNeeded() {
   }
 }
 
-void XML_callback( uint8_t statusflags, char* tagName,  uint16_t tagNameLen,  char* data,  uint16_t dataLen ) {
-  if (statusflags&STATUS_END_TAG) {
+static void XML_callback( char* tagName, char* data, XMLEvent event) {
+  if (event == XML_END_TAG) {
     Serial.println(String("END ")+tagName);
   }
-  if (statusflags&STATUS_START_TAG && 0==strcmp(tagName, "/feed")) {
+  if (event == XML_START_TAG && 0==strcmp(tagName, "feed")) {
     Serial.println("Start feed");
     inFeed = 1;
   }
   else if (inFeed) {
-    if (statusflags&STATUS_END_TAG && 0==strcmp(tagName, "/feed")) {
+    if (event == XML_END_TAG && 0==strcmp(tagName, "feed")) {
       Serial.println("End feed");
       inFeed = 0;
       gotFeed = 1;
     }
-    if (0==strncmp(tagName,"/http:",6))
-      tagName += 6;
-    else if (0==strncmp(tagName, "/https:", 7))
-      tagName += 7;
-    Serial.println(tagName);
-    char out[8]; sprintf(out, "%x", statusflags);
-    Serial.println(out);
-      
-    if (statusflags&STATUS_START_TAG && 0==strcmp(tagName, "/entry")) {
+
+    if (event == XML_START_TAG && 0==strcmp(tagName, "entry")) {
       inEntry = 1;
       haveId = 0;
       memzero(&curEvent, sizeof(EventInfo));
       Serial.println("Start entry");
     }
     else if (inEntry) {
-      if (statusflags&STATUS_END_TAG && 0==strcmp(tagName, "/entry")) {
+      if (event == XML_END_TAG && 0==strcmp(tagName, "entry")) {
         if (haveId) 
           storeEventIfNeeded();
         inEntry = 0;
         Serial.println("End entry");
       }
-      else if (statusflags&STATUS_TAG_TEXT && 0==strcmp(tagName, "/id")) {
+      else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "id")) {
         hash(curEvent.hash, data);
         Serial.println("Stored hash");
         char out[31];
         for (int i=0; i<20; i++) 
           sprintf(out+2*i, "%02x", curEvent.hash[i]);
+        Serial.println(out);
       }
-      else if ((statusflags & STATUS_TAG_TEXT) && 0==strcmp(tagName, "/entry/summary")) {
+      else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "summary")) {
         strncpy(curEvent.summary, data, MAX_SUMMARY);
         Serial.println("Summary: ");
         Serial.println(curEvent.summary);
       }
-      else if ((statusflags & STATUS_TAG_TEXT) && 0==strcmp(tagName, "/entry/cap:event")) {
+      else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "cap:event")) {
         for (int i=0; i<MAX_EVENT && data[i]; i++)
           curEvent.event[i] = tolower(data[i]);
         Serial.println("Event: ");
         Serial.println(curEvent.event);
       }
-      else if ((statusflags & STATUS_TAG_TEXT) && 0==strcmp(tagName, "/entry/cap:expires")) {
+      else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "cap:expires")) {
         strncpy(curEvent.expires, data, 25);
         Serial.println("Expires: ");
         Serial.println(curEvent.expires);
@@ -225,7 +219,7 @@ void monitorWeather() {
     XML_reset();
     while (client.connected()) {
       if (client.available()) {
-        xml.processChar(client.read());
+        xmlParseChar(client.read());
         //Serial.write(client.read());
       }
     }
