@@ -13,15 +13,17 @@
 const uint8_t beeperPin = 16;
 const uint8_t buttonPin = 0;
 const int beeperTones[][2] = { { 800, 500 }, {0, 700} };
+const uint32_t delayTime = 60000; // in milliseconds
 uint32_t toneStart = UNDEF_TIME;
 uint32_t lastUpdate = UNDEF_TIME;
+uint32_t lastUpdateSuccess = UNDEF_TIME;
+uint32_t curUpdateDelay = delayTime;
 uint32_t lastButtonDown = UNDEF_TIME;
 uint8_t buttonState = 0;
 int beeperState;
 
 #define BEEPER_OFF -1
 
-uint32_t delayTime = 60000; // in milliseconds
 #define RETRY_TIME 30000
 
 typedef enum {
@@ -88,6 +90,7 @@ void setup() {
   numEvents = 0;
   beeperState = BEEPER_OFF;
   lastUpdate = UNDEF_TIME;
+  curUpdateDelay = updateDelay;
 
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(beeperPin, OUTPUT);
@@ -276,6 +279,7 @@ void monitorWeather() {
       }
       updateBeeper(); 
     }
+    yield();
     if (gotFeed) {
       for (int i=numEvents-1; i>=0; i--) {
         if (!events[i].fresh)
@@ -284,12 +288,15 @@ void monitorWeather() {
       Serial.println("Successful read of feed");
       Serial.println(String("Have ") + String(numEvents) + " events");
     }
+    lastUpdateSuccess = millis();
+    curUpdateDelay = updateDelay;
     updateInformation();
   }
   else {
     Serial.println("Connection failed");
-    lastUpdate = millis() - delayTime + RETRY_TIME;
+    curUpdateDelay = RETRY_DELAY;
   }
+  lastUpdate = millis();
 }
 
 void handlePressed() {
@@ -314,7 +321,7 @@ void handleButton() {
 void loop() {
   handleButton();
   yield();
-  if (lastUpdate == UNDEF_TIME || (uint32_t)(millis() - lastUpdate) >= delayTime) {
+  if (lastUpdate == UNDEF_TIME || (uint32_t)(millis() - lastUpdate) >= curUpdateDelay) {
     lastUpdate = millis();
     monitorWeather();
   }
