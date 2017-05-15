@@ -3,6 +3,7 @@
 #include "TinyXML.h"
 #include "sha1.h"
 #include <string.h>
+#include <ctype.h>
 
 #define memzero(p,n) memset((p),0,(n))
 
@@ -25,7 +26,7 @@ char ssid[SSID_LENGTH] = "SSID";
 char psk[PSK_LENGTH] = "password";
 #endif
 
-#define MAX_EVENTS 40
+#define MAX_EVENTS 32
 
 #define MAX_SUMMARY 450
 #define MAX_EVENT 64
@@ -104,7 +105,7 @@ void storeEvent(int i) {
 void storeEventIfNeeded() {
   if (curEvent.event[0] == 0)
     return;
-  if (NULL == strcasestr(curEvent.event, "tornado"))
+  if (NULL == strstr(curEvent.event, "tornado"))
     return;
   
   for (int i=0; i<numEvents; i++) {
@@ -128,45 +129,59 @@ void storeEventIfNeeded() {
 }
 
 void XML_callback( uint8_t statusflags, char* tagName,  uint16_t tagNameLen,  char* data,  uint16_t dataLen ) {
-  if (statusflags&STATUS_START_TAG && 0==strcmp(tagName, "/http:/feed")) {
+  if (statusflags&STATUS_END_TAG) {
+    Serial.println(String("END ")+tagName);
+  }
+  if (statusflags&STATUS_START_TAG && 0==strcmp(tagName, "/feed")) {
+    Serial.println("Start feed");
     inFeed = 1;
   }
   else if (inFeed) {
-    if (statusflags&STATUS_END_TAG && 0==strcmp(tagName, "/http:/feed")) {
+    if (statusflags&STATUS_END_TAG && 0==strcmp(tagName, "/feed")) {
+      Serial.println("End feed");
       inFeed = 0;
       gotFeed = 1;
     }
-    if (statusflags&STATUS_START_TAG && 0==strcmp(tagName, "/http:/entry")) {
+    if (0==strncmp(tagName,"/http:",6))
+      tagName += 6;
+    else if (0==strncmp(tagName, "/https:", 7))
+      tagName += 7;
+    Serial.println(tagName);
+    char out[8]; sprintf(out, "%x", statusflags);
+    Serial.println(out);
+      
+    if (statusflags&STATUS_START_TAG && 0==strcmp(tagName, "/entry")) {
       inEntry = 1;
       haveId = 0;
       memzero(&curEvent, sizeof(EventInfo));
       Serial.println("Start entry");
     }
     else if (inEntry) {
-      if (statusflags&STATUS_END_TAG && 0==strcmp(tagName, "/http:/entry")) {
+      if (statusflags&STATUS_END_TAG && 0==strcmp(tagName, "/entry")) {
         if (haveId) 
           storeEventIfNeeded();
         inEntry = 0;
         Serial.println("End entry");
       }
-      else if (statusflags&STATUS_TAG_TEXT && 0==strcmp(tagName, "/http:/id")) {
+      else if (statusflags&STATUS_TAG_TEXT && 0==strcmp(tagName, "/id")) {
         hash(curEvent.hash, data);
         Serial.println("Stored hash");
         char out[31];
         for (int i=0; i<20; i++) 
           sprintf(out+2*i, "%02x", curEvent.hash[i]);
       }
-      else if ((statusflags & STATUS_TAG_TEXT) && 0==strcmp(tagName, "/http:/entry/summary")) {
+      else if ((statusflags & STATUS_TAG_TEXT) && 0==strcmp(tagName, "/entry/summary")) {
         strncpy(curEvent.summary, data, MAX_SUMMARY);
         Serial.println("Summary: ");
         Serial.println(curEvent.summary);
       }
-      else if ((statusflags & STATUS_TAG_TEXT) && 0==strcmp(tagName, "/http:/entry/cap:event")) {
-        strncpy(curEvent.event, data, MAX_EVENT);
+      else if ((statusflags & STATUS_TAG_TEXT) && 0==strcmp(tagName, "/entry/cap:event")) {
+        for (int i=0; i<MAX_EVENT && data[i]; i++)
+          curEvent.event[i] = tolower(data[i]);
         Serial.println("Event: ");
         Serial.println(curEvent.event);
       }
-      else if ((statusflags & STATUS_TAG_TEXT) && 0==strcmp(tagName, "/http:/entry/cap:expires")) {
+      else if ((statusflags & STATUS_TAG_TEXT) && 0==strcmp(tagName, "/entry/cap:expires")) {
         strncpy(curEvent.expires, data, 25);
         Serial.println("Expires: ");
         Serial.println(curEvent.expires);
