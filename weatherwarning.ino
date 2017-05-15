@@ -8,12 +8,15 @@
 #define memzero(p,n) memset((p),0,(n))
 
 #define UNDEF_TIME 0xFFFFFFFFu
+#define DEBOUNCE_TIME 50
 
 const uint8_t beeperPin = 16;
 const uint8_t buttonPin = 0;
 const int beeperTones[][2] = { { 800, 500 }, {0, 700} };
 uint32_t toneStart = UNDEF_TIME;
 uint32_t lastUpdate = UNDEF_TIME;
+uint32_t lastButtonDown = UNDEF_TIME;
+uint8_t buttonState = 0;
 int beeperState;
 
 #define BEEPER_OFF -1
@@ -85,6 +88,9 @@ void setup() {
   numEvents = 0;
   beeperState = BEEPER_OFF;
   lastUpdate = UNDEF_TIME;
+
+  pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(beeperPin, OUTPUT);
 }
 
 uint8_t inEntry;
@@ -230,9 +236,9 @@ void updateBeeper() {
   
     int pitch = beeperTones[beeperState][0];
     if (pitch>0)
-      tone(pitch);
+      tone(beeperPin, pitch);
     else
-      noTone();
+      noTone(beeperPin);
     toneStart = millis();
 }
 
@@ -247,7 +253,7 @@ void startBeeper() {
 void stopBeeper() {
   if (beeperState != BEEPER_OFF) {
     beeperState = BEEPER_OFF;
-    noTone();
+    noTone(beeperPin);
   }
 }
 
@@ -286,7 +292,28 @@ void monitorWeather() {
   }
 }
 
+void handlePressed() {
+  Serial.println("Pressed");
+}
+
+void handleButton() {
+  if (LOW == digitalRead(buttonPin)) {
+    if (!buttonState) {
+       buttonState = 1;
+       handlePressed();
+    }  
+    lastButtonDown = millis();
+  }
+  else {
+    if (buttonState && millis() >= lastButtonDown + DEBOUNCE_TIME) {
+      buttonState = 0;
+    }
+  }
+}
+
 void loop() {
+  handleButton();
+  yield();
   if (lastUpdate == UNDEF_TIME || (uint32_t)(millis() - lastUpdate) >= delayTime) {
     lastUpdate = millis();
     monitorWeather();
