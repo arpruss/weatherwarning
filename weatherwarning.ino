@@ -129,9 +129,6 @@ void storeEventIfNeeded() {
 }
 
 static void XML_callback( char* tagName, char* data, XMLEvent event) {
-  if (event == XML_END_TAG) {
-    Serial.println(String("END ")+tagName);
-  }
   if (event == XML_START_TAG && 0==strcmp(tagName, "feed")) {
     Serial.println("Start feed");
     inFeed = 1;
