@@ -7,15 +7,19 @@
 
 #define memzero(p,n) memset((p),0,(n))
 
+#define UNDEF_TIME 0xFFFFFFFFu
+
 const uint8_t beeperPin = 16;
 const uint8_t buttonPin = 0;
 const int beeperTones[][2] = { { 800, 500 }, {0, 700} };
-const uint32_t toneStart = 0;
+uint32_t toneStart = UNDEF_TIME;
+uint32_t lastUpdate = UNDEF_TIME;
 int beeperState;
 
 #define BEEPER_OFF -1
 
 uint32_t delayTime = 60000; // in milliseconds
+#define RETRY_TIME 30000
 
 typedef enum {
    INFORM_NONE = 0,
@@ -80,6 +84,7 @@ void setup() {
 
   numEvents = 0;
   beeperState = BEEPER_OFF;
+  lastUpdate = UNDEF_TIME;
 }
 
 uint8_t inEntry;
@@ -214,18 +219,21 @@ static void XML_callback( char* tagName, char* data, XMLEvent event) {
 void updateBeeper() {
   if (beeperState == BEEPER_OFF)
     return;
-  if (millis() >= toneStart + beeperTones[beeperState][1]) {
+    
+  if (toneStart != UNDEF_TIME && millis() < toneStart + beeperTones[beeperState][1])
+    return;
+  
+  if (toneStart != UNDEF_TIME) {
     beeperState = (beeperState+1) % (sizeof(beeperTones) / sizeof(*beeperTones));
-    toneStart = -1;
+    toneStart = UNDEF_TIME;
   }
-  if (toneStart == -1) {
+  
     int pitch = beeperTones[beeperState][0];
     if (pitch>0)
       tone(pitch);
     else
       noTone();
     toneStart = millis();
-  }
 }
 
 void startBeeper() {
@@ -260,6 +268,7 @@ void monitorWeather() {
         xmlParseChar(client.read());
         //Serial.write(client.read());
       }
+      updateBeeper(); 
     }
     if (gotFeed) {
       for (int i=numEvents-1; i>=0; i--) {
@@ -273,11 +282,17 @@ void monitorWeather() {
   }
   else {
     Serial.println("Connection failed");
+    lastUpdate = millis() - delayTime + RETRY_TIME;
   }
 }
 
 void loop() {
-  monitorWeather();
-  delay(delayTime);
+  if (lastUpdate == UNDEF_TIME || (uint32_t)(millis() - lastUpdate) >= delayTime) {
+    lastUpdate = millis();
+    monitorWeather();
+  }
+  yield();
+  updateBeeper();
+  yield();
 }
 
