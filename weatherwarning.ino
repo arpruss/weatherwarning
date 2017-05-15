@@ -7,6 +7,14 @@
 
 #define memzero(p,n) memset((p),0,(n))
 
+const uint8_t beeperPin = 16;
+const uint8_t buttonPin = 0;
+const int beeperTones[][2] = { { 800, 500 }, {0, 700} };
+const uint32_t toneStart = 0;
+int beeperState;
+
+#define BEEPER_OFF -1
+
 uint32_t delayTime = 60000; // in milliseconds
 
 typedef enum {
@@ -71,6 +79,7 @@ void setup() {
   Serial.println(String("WeatherWarning connected as ")+String(WiFi.localIP()));
 
   numEvents = 0;
+  beeperState = BEEPER_OFF;
 }
 
 uint8_t inEntry;
@@ -200,6 +209,38 @@ static void XML_callback( char* tagName, char* data, XMLEvent event) {
     Serial.println("Data: ");
     Serial.println(data);
   } */
+}
+
+void updateBeeper() {
+  if (beeperState == BEEPER_OFF)
+    return;
+  if (millis() >= toneStart + beeperTones[beeperState][1]) {
+    beeperState = (beeperState+1) % (sizeof(beeperTones) / sizeof(*beeperTones));
+    toneStart = -1;
+  }
+  if (toneStart == -1) {
+    int pitch = beeperTones[beeperState][0];
+    if (pitch>0)
+      tone(pitch);
+    else
+      noTone();
+    toneStart = millis();
+  }
+}
+
+void startBeeper() {
+  if (beeperState == BEEPER_OFF) {
+    toneStart = -1;
+    beeperState = 0;
+    updateBeeper();
+  }
+}
+
+void stopBeeper() {
+  if (beeperState != BEEPER_OFF) {
+    beeperState = BEEPER_OFF;
+    noTone();
+  }
 }
 
 void updateInformation() {
