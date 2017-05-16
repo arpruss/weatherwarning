@@ -21,6 +21,16 @@ uint32_t curUpdateDelay = delayTime;
 uint32_t lastButtonDown = UNDEF_TIME;
 uint8_t buttonState = 0;
 int beeperState;
+int screenHeight = 160;
+int dataFontLineHeight = 12;
+int statusFontLineHeight = 12;
+int numDataLines = (160-statusFontLineHeight)/dataFontLineHeight;
+
+#define MAX_LINES 30
+#define MAX_CHARS_PER_LINE 40
+char dataLines[MAX_LINES][MAX_CHARS_PER_LINE+1];
+char statusLine[MAX_CHARS_PER_LINE];
+#define STATUS_LINE -1
 
 #define BEEPER_OFF -1
 
@@ -41,26 +51,29 @@ char ssid[SSID_LENGTH] = "SSID";
 char psk[PSK_LENGTH] = "password";
 #endif
 
-#define MAX_EVENTS 32
+#define MAX_EVENTS 64
 
-#define MAX_SUMMARY 450
+//#define MAX_SUMMARY 450
 #define MAX_EVENT 64
 #define HASH_SIZE 20
 
 typedef struct {
   uint8_t hash[20]; 
   char event[MAX_EVENT+1]; // empty for empty event
-  char summary[MAX_SUMMARY+1]; 
+//  char summary[MAX_SUMMARY+1]; 
   //char effective[26]; 
   char expires[26];
   InformLevel needInform;
   InformLevel didInform;
+  uint8_t severity;
   uint8_t fresh;
 } EventInfo;
 
 static char tagBuffer[20];
-static char dataBuffer[MAX_SUMMARY+1];
+static char dataBuffer[MAX_EVENT+1]; // [MAX_SUMMARY+1];
 static void XML_callback( char* tagName, char* data, XMLEvent event);
+static const char* severityList[] = { "extreme", "severe", "moderate", "minor", "unknown" };
+#define ARRAY_LEN(x) (sizeof((x))/sizeof(*(x)))
 
 EventInfo events[MAX_EVENTS];
 EventInfo curEvent;
@@ -96,6 +109,37 @@ void setup() {
   pinMode(beeperPin, OUTPUT);
 }
 
+static char abridged[MAX_CHARS_PER_LINE+1];
+
+void abridge(char* out, char* in) {
+  // TODO: font!
+  if (strlen(in) > MAX_CHARS_PER_LINE) {
+    strncpy(out, in, MAX_CHARS_PER_LINE-3);
+    strcpy(out+MAX_CHARS_PER_LINE-3, "...");
+  }
+  else {
+    strcpy(out, in);
+  }
+}
+
+void eraseText(int lineNumber, char* data) {
+}
+
+void drawText(int lineNumber, char* data) {
+  Serial.println(String(lineNumber)+String(" ")+String(data));
+}
+
+void displayLine(int lineNumber, char* data) {
+  char* current = lineNumber == STATUS_LINE ? statusLine : dataLines[lineNumber];
+  abridge(abridged, data);
+  if (0==strcmp(abridged, data)) { // TODO: font
+    return;
+  }
+  eraseText(lineNumber, current);
+  drawText(lineNumber, abridged);
+  strcpy(current, abridged);
+}
+
 uint8_t inEntry;
 uint8_t inFeed;
 uint8_t gotFeed;
@@ -120,7 +164,6 @@ void deleteEvent(int i) {
 
 void storeEvent(int i) {
   events[i] = curEvent;
-  events[i].needInform = INFORM_LIGHT_AND_SOUND;
   events[i].didInform = INFORM_NONE;
   events[i].fresh = 1;
 }
@@ -128,8 +171,13 @@ void storeEvent(int i) {
 void storeEventIfNeeded() {
   if (curEvent.event[0] == 0)
     return;
-  if (NULL == strstr(curEvent.event, "tornado"))
-    return;
+    
+  if (NULL != strstr(curEvent.event, "tornado") || curEvent.severity == 0)
+    curEvent.needInform = INFORM_LIGHT_AND_SOUND;
+  else if (curEvent.severity == 1 || curEvent.severity == ARRAY_LEN(severityList) - 1 )
+    curEvent.needInform = INFORM_LIGHT;
+  else
+    curEvent.needInform = INFORM_NONE;
   
   for (int i=0; i<numEvents; i++) {
     if (0==memcmp(events[i].hash, curEvent.hash, HASH_SIZE)) {
@@ -178,27 +226,32 @@ static void XML_callback( char* tagName, char* data, XMLEvent event) {
       }
       else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "id")) {
         hash(curEvent.hash, data);
-        Serial.println("Stored hash");
         char out[31];
         for (int i=0; i<20; i++) 
           sprintf(out+2*i, "%02x", curEvent.hash[i]);
-        Serial.println(out);
+        Serial.println(String("Hash ")+String(out));
       }
-      else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "summary")) {
+/*      else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "summary")) {
         strncpy(curEvent.summary, data, MAX_SUMMARY);
         Serial.println("Summary: ");
         Serial.println(curEvent.summary);
-      }
+      } */
       else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "cap:event")) {
         for (int i=0; i<MAX_EVENT && data[i]; i++)
           curEvent.event[i] = tolower(data[i]);
-        Serial.println("Event: ");
-        Serial.println(curEvent.event);
+        Serial.println(String("Event: ")+String(curEvent.event));
       }
       else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "cap:expires")) {
         strncpy(curEvent.expires, data, 25);
-        Serial.println("Expires: ");
-        Serial.println(curEvent.expires);
+        Serial.println(String("Expires: ")+String(curEvent.expires));
+      }
+      else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "cap:severity")) {
+        int i;
+        for(i=0; i<ARRAY_LEN(severityList)-1; i++) // last one is "unknown" 
+          if(0==strcasecmp(data, severityList[i]))
+            break;
+        curEvent.severity = i;
+        Serial.println(String("Severity: ")+String(severityList[i]));
       }
     }
 /*    if (inEntry && (statusflags & STATUS_TAG_TEXT) && 0==strcmp(tagName, "/http:/entry/cap:severity")) {
@@ -264,6 +317,10 @@ void updateInformation() {
   //TODO
 }
 
+int eventCompare(const void* a, const void* b) {
+  return (int) ((const EventInfo*)a)->severity - (int) ((const EventInfo*)b)->severity;
+}
+
 void monitorWeather() {
   WiFiClientSecure client;
   if (client.connect("alerts.weather.gov", 443)) { // TXZ159=McLennan; TXZ419=El Paso; AZZ015=Flagstaff, AZ
@@ -288,13 +345,15 @@ void monitorWeather() {
       Serial.println("Successful read of feed");
       Serial.println(String("Have ") + String(numEvents) + " events");
     }
+    if (numEvents>1)
+      qsort(events,numEvents,sizeof(*events),eventCompare);
     lastUpdateSuccess = millis();
     curUpdateDelay = delayTime;
     updateInformation();
   }
   else {
     Serial.println("Connection failed");
-    curUpdateDelay = RETRY_DELAY;
+    curUpdateDelay = RETRY_TIME;
   }
   lastUpdate = millis();
 }
