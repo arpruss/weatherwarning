@@ -48,7 +48,7 @@ int colors[2] = { 0x0000, 0xFFFF };
 uint8_t colorReverse = 0;
 
 #define MAX_LINES 20
-#define MAX_CHARS_PER_LINE 21
+#define MAX_CHARS_PER_LINE 20
 char dataLines[MAX_LINES][MAX_CHARS_PER_LINE+1];
 #define STATUS_LINE1 MAX_LINES-2
 #define STATUS_LINE2 MAX_LINES-1
@@ -378,6 +378,10 @@ void updateInformation() {
     snprintf(buf, MAX_CHARS_PER_LINE, "+ %d more events", numEvents-numDataLines/2);
     displayLine(STATUS_LINE1, buf);
   }
+  else if (numEvents == 0) {
+    displayLine(STATUS_LINE1, "No events");
+  }
+  
   if (lastUpdateSuccess == UNDEF_TIME)
     strcpy(buf, "No data yet");
   else {
@@ -385,6 +389,14 @@ void updateInformation() {
     snprintf(buf, MAX_CHARS_PER_LINE, "%ld.%03u s. ago", delta/1000, (unsigned int)(delta%1000));
   }
   displayLine(STATUS_LINE2, buf);
+
+  for (int i=0; i<numEvents && 2*i < numDataLines; i++) {
+    displayLine(2*i, events[i].event);
+    if (strlen(events[i].expires)>10) {
+      snprintf(buf, "expires %s", events[i].expires+10);
+      displayLine(2*i+1, buf);
+    }
+  }
 }
 
 int eventCompare(const EventInfo* a, const EventInfo* b) {
