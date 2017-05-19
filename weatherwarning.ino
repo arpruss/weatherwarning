@@ -5,10 +5,25 @@
 #include <string.h>
 #include <ctype.h>
 
+#include <TFT_eSPI.h> // https://github.com/Bodmer/TFT_eSPI
+
 #define memzero(p,n) memset((p),0,(n))
 
 #define UNDEF_TIME 0xFFFFFFFFu
 #define DEBOUNCE_TIME 50
+
+// Display SDO/MISO  to NodeMCU pin D6 (or leave disconnected if not reading TFT)
+// Display LED       to NodeMCU pin VIN (or 5V, see below)
+// Display SCK       to NodeMCU pin D5
+// Display SDI/MOSI  to NodeMCU pin D7
+// Display DC (RS/AO)to NodeMCU pin D3
+// Display RESET     to NodeMCU pin D4 (or RST, see below)
+// Display CS        to NodeMCU pin D8 (or GND, see below)
+// Display GND       to NodeMCU pin GND (0V)
+// Display VCC       to NodeMCU 5V or 3.3V
+//#define TFT_CS   PIN_D8  // Chip select control pin D8
+//#define TFT_DC   PIN_D3  // Data Command control pin
+
 
 const uint8_t beeperPin = 16;
 const uint8_t buttonPin = 0;
@@ -21,16 +36,24 @@ uint32_t curUpdateDelay = delayTime;
 uint32_t lastButtonDown = UNDEF_TIME;
 uint8_t buttonState = 0;
 int beeperState;
-int screenHeight = 160;
-int dataFontLineHeight = 12;
-int statusFontLineHeight = 12;
-int numDataLines = (160-statusFontLineHeight)/dataFontLineHeight;
+int screenHeight = 128;
+int screenWidth = 160;
+int dataFontLineHeight = 8;
+int dataFontCharWidth = 8;
+int statusFontLineHeight = 8;
+int statusFontCharWidth = 8;
+int numDataLines = (screenHeight-2*statusFontLineHeight)/dataFontLineHeight;
 
-#define MAX_LINES 30
-#define MAX_CHARS_PER_LINE 40
+int colors[2] = { 0x0000, 0xFFFF };
+uint8_t colorReverse = 0;
+
+#define MAX_LINES 20
+#define MAX_CHARS_PER_LINE 21
 char dataLines[MAX_LINES][MAX_CHARS_PER_LINE+1];
-char statusLine[MAX_CHARS_PER_LINE];
-#define STATUS_LINE -1
+#define STATUS_LINE1 MAX_LINES-2
+#define STATUS_LINE2 MAX_LINES-1
+
+TFT_eSPI tft = TFT_eSPI();
 
 #define BEEPER_OFF -1
 
@@ -51,7 +74,7 @@ char ssid[SSID_LENGTH] = "SSID";
 char psk[PSK_LENGTH] = "password";
 #endif
 
-#define MAX_EVENTS 64
+#define MAX_EVENTS 20
 
 //#define MAX_SUMMARY 450
 #define MAX_EVENT 64
@@ -90,8 +113,13 @@ void hash(uint8_t* hash, char* data) {
   SHA1Final((unsigned char*)hash, &ctx);
 }
 
+void clearScreen() {
+  tft.fillRect(0,0,screenWidth,screenHeight-2*statusFontLineHeight,colors[1^colorReverse]);
+  tft.fillRect(0,screenHeight-2*statusFontLineHeight,screenWidth,2*statusFontLineHeight,colors[colorReverse]);
+}
+
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
 
   WiFi.begin(ssid, psk);
 
@@ -107,6 +135,20 @@ void setup() {
 
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(beeperPin, OUTPUT);
+//  tft.initR(INITR_BLACKTAB); // initR(tftVersion);
+  tft.begin();
+  Serial.println(String(tft.width()));
+  Serial.println(String(tft.height()));
+  
+  tft.setRotation(1);
+  Serial.println(String(tft.width()));
+  Serial.println(String(tft.height()));
+  tft.fillScreen(colors[0]);
+  tft.setCursor(0,0);
+  tft.setTextColor(colors[1]);
+  tft.print("WeatherWarning");
+  delay(2500);
+  clearScreen();
 }
 
 static char abridged[MAX_CHARS_PER_LINE+1];
@@ -122,15 +164,32 @@ void abridge(char* out, char* in) {
   }
 }
 
+void writeText(int lineNumber, char* data) {
+  if (lineNumber == STATUS_LINE1) {
+    tft.setCursor(screenWidth-statusFontCharWidth*strlen(data), screenHeight-2*statusFontLineHeight);
+  }
+  else if (lineNumber<STATUS_LINE1 && lineNumber%2) {
+    tft.setCursor(screenWidth-statusFontCharWidth*strlen(data), lineNumber*dataFontLineHeight);
+  }
+  else {
+    tft.setCursor(0, lineNumber*dataFontLineHeight);
+  }
+  tft.print(data);
+}
+
 void eraseText(int lineNumber, char* data) {
+  tft.setTextColor( colors[ (lineNumber>=STATUS_LINE1)^colorReverse ] );
+  writeText(lineNumber, data);
 }
 
 void drawText(int lineNumber, char* data) {
+  tft.setTextColor( colors[ 1^(lineNumber>=STATUS_LINE1)^colorReverse ] );
+  writeText(lineNumber, data);
   Serial.println(String(lineNumber)+String(" ")+String(data));
 }
 
 void displayLine(int lineNumber, char* data) {
-  char* current = lineNumber == STATUS_LINE ? statusLine : dataLines[lineNumber];
+  char* current = dataLines[lineNumber];
   abridge(abridged, data);
   if (0==strcmp(abridged, data)) { // TODO: font
     return;
@@ -313,18 +372,46 @@ void stopBeeper() {
   }
 }
 
+char buf[MAX_CHARS_PER_LINE];
 void updateInformation() {
-  //TODO
+  if (numEvents > numDataLines/2) {
+    snprintf(buf, MAX_CHARS_PER_LINE, "+ %d more events", numEvents-numDataLines/2);
+    displayLine(STATUS_LINE1, buf);
+  }
+  if (lastUpdateSuccess == UNDEF_TIME)
+    strcpy(buf, "No data yet");
+  else {
+    uint32_t delta = millis()-lastUpdateSuccess;
+    snprintf(buf, MAX_CHARS_PER_LINE, "%ld.%03u s. ago", delta/1000, (unsigned int)(delta%1000));
+  }
+  displayLine(STATUS_LINE2, buf);
 }
 
-int eventCompare(const void* a, const void* b) {
-  return (int) ((const EventInfo*)a)->severity - (int) ((const EventInfo*)b)->severity;
+int eventCompare(const EventInfo* a, const EventInfo* b) {
+  return (int) a->severity - (int) b->severity;
+}
+
+void sortEvents() {
+  // https://en.wikipedia.org/wiki/Bubble_sort
+  int n = numEvents;
+  do {
+    int newN = 0;
+    for (int i=1; i<n; i++) {
+      if (eventCompare(events+i-1,events+i)) {
+        EventInfo t = events[i-1];
+        events[i-1] = events[i];
+        events[i] = t;
+        newN = i;
+      }
+    }
+    n = newN;
+  } while(n>0);
 }
 
 void monitorWeather() {
   WiFiClientSecure client;
-  if (client.connect("alerts.weather.gov", 443)) { // TXZ159=McLennan; TXZ419=El Paso; AZZ015=Flagstaff, AZ
-    client.print("GET /cap/wwaatmget.php?x=AZZ015 HTTP/1.1\r\n"
+  if (client.connect("alerts.weather.gov", 443)) { // TXZ159=McLennan; AZZ015=Flagstaff, AZ
+    client.print("GET /cap/wwaatmget.php?x=TXZ159 HTTP/1.1\r\n"
       "Host: alerts.weather.gov\r\n"
       "User-Agent: weatherwarningESP8266\r\n"
       "Connection: close\r\n\r\n"); 
@@ -345,8 +432,11 @@ void monitorWeather() {
       Serial.println("Successful read of feed");
       Serial.println(String("Have ") + String(numEvents) + " events");
     }
-    if (numEvents>1)
-      qsort(events,numEvents,sizeof(*events),eventCompare);
+    if (numEvents>1) {
+      // there are so few events that we'll just do a bubble sort
+      sortEvents();
+    }
+
     lastUpdateSuccess = millis();
     curUpdateDelay = delayTime;
     updateInformation();
