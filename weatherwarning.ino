@@ -24,11 +24,13 @@
 //#define TFT_CS   PIN_D8  // Chip select control pin D8
 //#define TFT_DC   PIN_D3  // Data Command control pin
 
-#define LOCATION "KSZ032" // "TXZ159" // "KSZ032" // 
+#define LOCATION "TXZ159" // "KSZ032" // "TXZ159" // "KSZ032" // 
 #define LOCATION_NAME "McLennan" // "TEST" // 
 
 const uint8_t beeperPin = 16;
 const uint8_t buttonPin = 0;
+const uint8_t ledPin = 2;
+const uint8_t ledReverse = 1;
 const int beeperTones[][2] = { { 800, 500 }, {0, 700} };
 const uint32_t delayTime = 60000; // in milliseconds
 const uint32_t informationUpdateDelay = 1000;
@@ -62,11 +64,8 @@ TFT_eSPI tft = TFT_eSPI();
 
 #define RETRY_TIME 30000
 
-typedef enum {
-   INFORM_NONE = 0,
-   INFORM_LIGHT = 1,
-   INFORM_LIGHT_AND_SOUND = 2
-} InformLevel;
+#define INFORM_LIGHT 1
+#define INFORM_SOUND 2
 
 #define SSID_LENGTH 33
 #define PSK_LENGTH  64
@@ -89,8 +88,8 @@ typedef struct {
 //  char summary[MAX_SUMMARY+1]; 
   //char effective[26]; 
   char expires[26];
-  InformLevel needInform;
-  InformLevel didInform;
+  uint8_t needInform;
+  uint8_t didInform;
   uint8_t severity;
   uint8_t fresh;
 } EventInfo;
@@ -119,17 +118,13 @@ void hash(uint8_t* hash, char* data) {
 void clearScreen() {
   tft.fillRect(0,0,screenWidth,screenHeight-2*statusFontLineHeight,colors[colorReverse]);
   tft.fillRect(0,screenHeight-2*statusFontLineHeight,screenWidth,2*statusFontLineHeight,colors[1^colorReverse]);
+  for (int i=0; i<sizeof(dataLines)/sizeof(*dataLines); i++) {
+    dataLines[i][0] = 0;
+  }
 }
 
 void setup() {
   Serial.begin(9600);
-
-  WiFi.begin(ssid, psk);
-
-  while (WiFi.status() != WL_CONNECTED)
-    delay(500);
-
-  Serial.println(String("WeatherWarning connected as ")+String(WiFi.localIP()));
 
   numEvents = 0;
   beeperState = BEEPER_OFF;
@@ -138,18 +133,23 @@ void setup() {
 
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(beeperPin, OUTPUT);
-//  tft.initR(INITR_BLACKTAB); // initR(tftVersion);
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, ledReverse);
   tft.begin();
-  Serial.println(String(tft.width()));
-  Serial.println(String(tft.height()));
   
   tft.setRotation(1);
-  Serial.println(String(tft.width()));
-  Serial.println(String(tft.height()));
   tft.fillScreen(colors[0]);
-  tft.setCursor(0,0);
   tft.setTextColor(colors[1]);
-  tft.print("WeatherWarning");
+  tft.setCursor(0,0);
+  tft.print("WeatherWarning for ESP8266");
+  
+  WiFi.begin(ssid, psk);
+
+  while (WiFi.status() != WL_CONNECTED)
+    delay(500);
+
+  tft.setCursor(0,dataFontLineHeight);
+  tft.print(String("Connected at ")+String(WiFi.localIP()));
   delay(2500);
   clearScreen();
 }
@@ -228,7 +228,7 @@ void deleteEvent(int i) {
 
 void storeEvent(int i) {
   events[i] = curEvent;
-  events[i].didInform = INFORM_NONE;
+  events[i].didInform = 0;
   events[i].fresh = 1;
 }
 
@@ -239,11 +239,11 @@ void storeEventIfNeeded() {
     return;
     
   if (NULL != strstr(curEvent.event, "tornado") || curEvent.severity == 0)
-    curEvent.needInform = INFORM_LIGHT_AND_SOUND;
+    curEvent.needInform = INFORM_LIGHT | INFORM_SOUND;
   else if (curEvent.severity == 1 || curEvent.severity == ARRAY_LEN(severityList) - 1 )
     curEvent.needInform = INFORM_LIGHT;
   else
-    curEvent.needInform = INFORM_NONE;
+    curEvent.needInform = 0;
   
   for (int i=0; i<numEvents; i++) {
     if (0==memcmp(events[i].hash, curEvent.hash, HASH_SIZE)) {
@@ -393,6 +393,32 @@ void stopBeeper() {
 char buf[MAX_CHARS_PER_LINE+1];
 
 void updateInformation() {
+  uint8_t informNeeded = 0;
+  for (int i=0; i<numEvents; i++)
+    informNeeded |= events[i].needInform & ~events[i].didInform;
+
+  if (informNeeded & INFORM_LIGHT) {
+    if (!colorReverse) {
+      colorReverse = 1;
+      clearScreen();
+    }
+  }
+  else {
+    if (colorReverse) {
+      colorReverse = 0;
+      clearScreen();
+    }
+  }
+  
+  if (informNeeded & INFORM_SOUND) {
+    startBeeper();
+  }
+  else {
+    stopBeeper();
+  }
+  
+  digitalWrite(ledPin, ledReverse^(numEvents>0));
+  
   if (numEvents > numDataLines/2) {
     snprintf(buf, MAX_CHARS_PER_LINE, "+ %d more events", numEvents-numDataLines/2);
     displayLine(STATUS_LINE1, buf);
@@ -451,11 +477,13 @@ void sortEvents() {
 
 void monitorWeather() {
   WiFiClientSecure client;
+  displayLine(STATUS_LINE2, "Connecting...");
   if (client.connect("alerts.weather.gov", 443)) { // TXZ159=McLennan; AZZ015=Flagstaff, AZ
     client.print("GET /cap/wwaatmget.php?x=" LOCATION " HTTP/1.1\r\n"
       "Host: alerts.weather.gov\r\n"
       "User-Agent: weatherwarningESP8266\r\n"
       "Connection: close\r\n\r\n"); 
+    displayLine(STATUS_LINE2, "Loading...");
     XML_reset();
     while (client.connected()) {
       if (client.available()) {
@@ -491,7 +519,16 @@ void monitorWeather() {
 }
 
 void handlePressed() {
-  Serial.println("Pressed");
+  if (beeperState != BEEPER_OFF) {
+    for(int i=0; i<numEvents; i++)
+      events[i].didInform |= INFORM_SOUND;
+    stopBeeper();
+  }
+  if (colorReverse) {
+    for(int i=0; i<numEvents; i++)
+      events[i].didInform |= INFORM_LIGHT;
+    updateInformation();
+  }
 }
 
 void handleButton() {
