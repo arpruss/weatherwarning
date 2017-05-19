@@ -24,11 +24,14 @@
 //#define TFT_CS   PIN_D8  // Chip select control pin D8
 //#define TFT_DC   PIN_D3  // Data Command control pin
 
+#define LOCATION "KSZ032" // "TXZ159" // "KSZ032" // 
+#define LOCATION_NAME "McLennan" // "TEST" // 
 
 const uint8_t beeperPin = 16;
 const uint8_t buttonPin = 0;
 const int beeperTones[][2] = { { 800, 500 }, {0, 700} };
 const uint32_t delayTime = 60000; // in milliseconds
+const uint32_t informationUpdateDelay = 1000;
 uint32_t toneStart = UNDEF_TIME;
 uint32_t lastUpdate = UNDEF_TIME;
 uint32_t lastUpdateSuccess = UNDEF_TIME;
@@ -36,22 +39,22 @@ uint32_t curUpdateDelay = delayTime;
 uint32_t lastButtonDown = UNDEF_TIME;
 uint8_t buttonState = 0;
 int beeperState;
-int screenHeight = 128;
-int screenWidth = 160;
-int dataFontLineHeight = 8;
-int dataFontCharWidth = 8;
-int statusFontLineHeight = 8;
-int statusFontCharWidth = 8;
-int numDataLines = (screenHeight-2*statusFontLineHeight)/dataFontLineHeight;
+#define screenHeight 128
+#define screenWidth  160
+#define dataFontLineHeight 8
+#define dataFontCharWidth 6
+#define statusFontLineHeight 8
+#define statusFontCharWidth 6
+#define numDataLines ((screenHeight-2*statusFontLineHeight)/dataFontLineHeight)
+uint32_t lastInformationUpdate = UNDEF_TIME;
 
 int colors[2] = { 0x0000, 0xFFFF };
 uint8_t colorReverse = 0;
 
-#define MAX_LINES 20
-#define MAX_CHARS_PER_LINE 20
-char dataLines[MAX_LINES][MAX_CHARS_PER_LINE+1];
-#define STATUS_LINE1 MAX_LINES-2
-#define STATUS_LINE2 MAX_LINES-1
+#define MAX_CHARS_PER_LINE (screenWidth / (dataFontCharWidth<statusFontCharWidth ? dataFontCharWidth : statusFontCharWidth))
+char dataLines[numDataLines+2][MAX_CHARS_PER_LINE+1];
+#define STATUS_LINE1 numDataLines
+#define STATUS_LINE2 (numDataLines+1)
 
 TFT_eSPI tft = TFT_eSPI();
 
@@ -114,8 +117,8 @@ void hash(uint8_t* hash, char* data) {
 }
 
 void clearScreen() {
-  tft.fillRect(0,0,screenWidth,screenHeight-2*statusFontLineHeight,colors[1^colorReverse]);
-  tft.fillRect(0,screenHeight-2*statusFontLineHeight,screenWidth,2*statusFontLineHeight,colors[colorReverse]);
+  tft.fillRect(0,0,screenWidth,screenHeight-2*statusFontLineHeight,colors[colorReverse]);
+  tft.fillRect(0,screenHeight-2*statusFontLineHeight,screenWidth,2*statusFontLineHeight,colors[1^colorReverse]);
 }
 
 void setup() {
@@ -153,7 +156,7 @@ void setup() {
 
 static char abridged[MAX_CHARS_PER_LINE+1];
 
-void abridge(char* out, char* in) {
+void abridge(char* out, const char* in) {
   // TODO: font!
   if (strlen(in) > MAX_CHARS_PER_LINE) {
     strncpy(out, in, MAX_CHARS_PER_LINE-3);
@@ -164,12 +167,12 @@ void abridge(char* out, char* in) {
   }
 }
 
-void writeText(int lineNumber, char* data) {
+void writeText(int lineNumber, const char* data) {
   if (lineNumber == STATUS_LINE1) {
     tft.setCursor(screenWidth-statusFontCharWidth*strlen(data), screenHeight-2*statusFontLineHeight);
   }
   else if (lineNumber<STATUS_LINE1 && lineNumber%2) {
-    tft.setCursor(screenWidth-statusFontCharWidth*strlen(data), lineNumber*dataFontLineHeight);
+    tft.setCursor(screenWidth-dataFontCharWidth*strlen(data), lineNumber*dataFontLineHeight);
   }
   else {
     tft.setCursor(0, lineNumber*dataFontLineHeight);
@@ -177,21 +180,23 @@ void writeText(int lineNumber, char* data) {
   tft.print(data);
 }
 
-void eraseText(int lineNumber, char* data) {
+void eraseText(int lineNumber, const char* data) {
   tft.setTextColor( colors[ (lineNumber>=STATUS_LINE1)^colorReverse ] );
   writeText(lineNumber, data);
 }
 
-void drawText(int lineNumber, char* data) {
+void drawText(int lineNumber, const char* data) {
   tft.setTextColor( colors[ 1^(lineNumber>=STATUS_LINE1)^colorReverse ] );
+  Serial.println("Color "+String(colors[ (lineNumber>=STATUS_LINE1)^colorReverse ]));
   writeText(lineNumber, data);
   Serial.println(String(lineNumber)+String(" ")+String(data));
 }
 
-void displayLine(int lineNumber, char* data) {
+void displayLine(int lineNumber, const char* data) {
+  Serial.println(String(lineNumber)+" "+String(data));
   char* current = dataLines[lineNumber];
   abridge(abridged, data);
-  if (0==strcmp(abridged, data)) { // TODO: font
+  if (0==strcmp(abridged, current)) { // TODO: font
     return;
   }
   eraseText(lineNumber, current);
@@ -228,6 +233,8 @@ void storeEvent(int i) {
 }
 
 void storeEventIfNeeded() {
+  Serial.println(curEvent.event);
+  
   if (curEvent.event[0] == 0)
     return;
     
@@ -246,6 +253,7 @@ void storeEventIfNeeded() {
     }
   }
 
+  Serial.println("adding");
   if (numEvents < MAX_EVENTS) {
     storeEvent(numEvents);
     numEvents++;
@@ -289,6 +297,7 @@ static void XML_callback( char* tagName, char* data, XMLEvent event) {
         for (int i=0; i<20; i++) 
           sprintf(out+2*i, "%02x", curEvent.hash[i]);
         Serial.println(String("Hash ")+String(out));
+        haveId = 1;
       }
 /*      else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "summary")) {
         strncpy(curEvent.summary, data, MAX_SUMMARY);
@@ -337,6 +346,15 @@ static void XML_callback( char* tagName, char* data, XMLEvent event) {
   } */
 }
 
+void formatTime(char* buf, const char* t) {
+  strncpy(buf, t+5, 2);
+  buf[2] = '/';
+  strncpy(buf+3, t+8, 2);
+  buf[5] = ' ';
+  strncpy(buf+6, t+11, 5);
+  buf[6+5] = 0;
+}
+
 void updateBeeper() {
   if (beeperState == BEEPER_OFF)
     return;
@@ -379,25 +397,35 @@ void updateInformation() {
     snprintf(buf, MAX_CHARS_PER_LINE, "+ %d more events", numEvents-numDataLines/2);
     displayLine(STATUS_LINE1, buf);
   }
-  else if (numEvents == 0) {
-    displayLine(STATUS_LINE1, "No events");
+  else {
+    displayLine(STATUS_LINE1, "");
   }
   
-  if (lastUpdateSuccess == UNDEF_TIME)
-    strcpy(buf, "No data yet");
+  if (lastUpdateSuccess == UNDEF_TIME) {
+    displayLine(STATUS_LINE2, "No data received yet.");
+  }
   else {
     uint32_t delta = millis()-lastUpdateSuccess;
-    snprintf(buf, MAX_CHARS_PER_LINE, "age: %ld.%u s.", delta/1000, (unsigned int)((delta/1000)%10));
+    snprintf(buf, MAX_CHARS_PER_LINE, LOCATION_NAME " %ld.%us ago", delta/1000, (unsigned int)((delta/1000)%10));
+    displayLine(STATUS_LINE2, buf);
   }
-  displayLine(STATUS_LINE2, buf);
 
-  for (int i=0; i<numEvents && 2*i < numDataLines; i++) {
-    displayLine(2*i, events[i].event);
-    if (strlen(events[i].expires)>10) {
-      snprintf(buf, MAX_CHARS_PER_LINE, "expires %s", events[i].expires+10);
-      displayLine(2*i+1, buf);
+  for (int i=0; 2*i < numDataLines; i++) {
+    if (i<numEvents) {
+      displayLine(2*i, events[i].event);
+      if (strlen(events[i].expires)>11) {
+        strcpy(buf, "expires ");
+        formatTime(buf+8, events[i].expires);
+        displayLine(2*i+1, buf);
+      }
+    }
+    else {
+      displayLine(2*i, i==0 ? "No weather warnings." : "");
+      displayLine(2*i+1, "");
     }
   }
+
+  lastInformationUpdate = millis();
 }
 
 int eventCompare(const EventInfo* a, const EventInfo* b) {
@@ -424,7 +452,7 @@ void sortEvents() {
 void monitorWeather() {
   WiFiClientSecure client;
   if (client.connect("alerts.weather.gov", 443)) { // TXZ159=McLennan; AZZ015=Flagstaff, AZ
-    client.print("GET /cap/wwaatmget.php?x=TXZ159 HTTP/1.1\r\n"
+    client.print("GET /cap/wwaatmget.php?x=" LOCATION " HTTP/1.1\r\n"
       "Host: alerts.weather.gov\r\n"
       "User-Agent: weatherwarningESP8266\r\n"
       "Connection: close\r\n\r\n"); 
@@ -452,6 +480,7 @@ void monitorWeather() {
 
     lastUpdateSuccess = millis();
     curUpdateDelay = delayTime;
+    Serial.println("Updating");
     updateInformation();
   }
   else {
@@ -490,5 +519,8 @@ void loop() {
   yield();
   updateBeeper();
   yield();
+  if ((uint32_t)(millis() - lastInformationUpdate) >= informationUpdateDelay) {
+    updateInformation();
+  }
 }
 
