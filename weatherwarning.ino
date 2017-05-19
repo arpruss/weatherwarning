@@ -372,7 +372,8 @@ void stopBeeper() {
   }
 }
 
-char buf[MAX_CHARS_PER_LINE];
+char buf[MAX_CHARS_PER_LINE+1];
+
 void updateInformation() {
   if (numEvents > numDataLines/2) {
     snprintf(buf, MAX_CHARS_PER_LINE, "+ %d more events", numEvents-numDataLines/2);
@@ -386,14 +387,14 @@ void updateInformation() {
     strcpy(buf, "No data yet");
   else {
     uint32_t delta = millis()-lastUpdateSuccess;
-    snprintf(buf, MAX_CHARS_PER_LINE, "%ld.%03u s. ago", delta/1000, (unsigned int)(delta%1000));
+    snprintf(buf, MAX_CHARS_PER_LINE, "age: %ld.%u s.", delta/1000, (unsigned int)((delta/1000)%10));
   }
   displayLine(STATUS_LINE2, buf);
 
   for (int i=0; i<numEvents && 2*i < numDataLines; i++) {
     displayLine(2*i, events[i].event);
     if (strlen(events[i].expires)>10) {
-      snprintf(buf, "expires %s", events[i].expires+10);
+      snprintf(buf, MAX_CHARS_PER_LINE, "expires %s", events[i].expires+10);
       displayLine(2*i+1, buf);
     }
   }
