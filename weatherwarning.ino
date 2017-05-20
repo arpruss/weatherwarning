@@ -16,30 +16,35 @@
 // Display LED       to NodeMCU pin VIN (or 5V, see below)
 // Display SCK       to NodeMCU pin D5
 // Display SDI/MOSI  to NodeMCU pin D7
-// Display DC (RS/AO)to NodeMCU pin D3
-// Display RESET     to NodeMCU pin D4 (or RST, see below)
+// Display DC (RS/AO)to NodeMCU pin D1 // GPIO5
+// Display RESET     to +3.3V // was: to NodeMCU pin D4 (or RST, see below)
 // Display CS        to NodeMCU pin D8 (or GND, see below)
 // Display GND       to NodeMCU pin GND (0V)
 // Display VCC       to NodeMCU 5V or 3.3V
 //#define TFT_CS   PIN_D8  // Chip select control pin D8
-//#define TFT_DC   PIN_D3  // Data Command control pin
+//#define TFT_DC   PIN_D1  // Data Command control pin
 
-#define LOCATION "TXZ159" // "KSZ032" // "TXZ159" // "KSZ032" // 
-#define LOCATION_NAME "McLennan" // "TEST" // 
+#define LOCATION "TXZ159" // "OKZ070" // "KSZ032" // "TXZ159" // "KSZ032" // 
+#define LOCATION_NAME "McLennan" // "TEST" // "TEST" // 
 
-const uint8_t beeperPin = 16;
-const uint8_t buttonPin = 0;
-const uint8_t ledPin = 2;
-const uint8_t ledReverse = 1;
+const uint8_t beeperPin = 2; // D0
+const uint8_t buttonPin = 0; // D3
+const uint8_t ledPin = 16; // D0
+const uint8_t backlightPin = 4; // D2
+const uint8_t ledReverse = 1; 
 const int beeperTones[][2] = { { 800, 500 }, {0, 700} };
-const uint32_t delayTime = 60000; // in milliseconds
+const uint32_t delayTime = 120000ul; // in milliseconds
 const uint32_t informationUpdateDelay = 1000;
+const uint32_t screenOffDelay = 30000ul;
 uint32_t toneStart = UNDEF_TIME;
 uint32_t lastUpdate = UNDEF_TIME;
 uint32_t lastUpdateSuccess = UNDEF_TIME;
 uint32_t curUpdateDelay = delayTime;
 uint32_t lastButtonDown = UNDEF_TIME;
+uint32_t screenOffTimer = UNDEF_TIME;
 uint8_t buttonState = 0;
+uint8_t backlightState = 0;
+uint8_t updateFailed = 0;
 int beeperState;
 #define screenHeight 128
 #define screenWidth  160
@@ -51,7 +56,7 @@ int beeperState;
 uint32_t lastInformationUpdate = UNDEF_TIME;
 
 int colors[2] = { 0x0000, 0xFFFF };
-uint8_t colorReverse = 0;
+uint8_t informLight = 0;
 
 #define MAX_CHARS_PER_LINE (screenWidth / (dataFontCharWidth<statusFontCharWidth ? dataFontCharWidth : statusFontCharWidth))
 char dataLines[numDataLines+2][MAX_CHARS_PER_LINE+1];
@@ -62,7 +67,7 @@ TFT_eSPI tft = TFT_eSPI();
 
 #define BEEPER_OFF -1
 
-#define RETRY_TIME 30000
+#define RETRY_TIME 25000
 
 #define INFORM_LIGHT 1
 #define INFORM_SOUND 2
@@ -116,8 +121,8 @@ void hash(uint8_t* hash, char* data) {
 }
 
 void clearScreen() {
-  tft.fillRect(0,0,screenWidth,screenHeight-2*statusFontLineHeight,colors[colorReverse]);
-  tft.fillRect(0,screenHeight-2*statusFontLineHeight,screenWidth,2*statusFontLineHeight,colors[1^colorReverse]);
+  tft.fillRect(0,0,screenWidth,screenHeight-2*statusFontLineHeight,colors[informLight]);
+  tft.fillRect(0,screenHeight-2*statusFontLineHeight,screenWidth,2*statusFontLineHeight,colors[1^informLight]);
   for (int i=0; i<sizeof(dataLines)/sizeof(*dataLines); i++) {
     dataLines[i][0] = 0;
   }
@@ -134,6 +139,7 @@ void setup() {
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(beeperPin, OUTPUT);
   pinMode(ledPin, OUTPUT);
+  pinMode(backlightPin, OUTPUT);
   digitalWrite(ledPin, ledReverse);
   tft.begin();
   
@@ -142,6 +148,8 @@ void setup() {
   tft.setTextColor(colors[1]);
   tft.setCursor(0,0);
   tft.print("WeatherWarning for ESP8266");
+  digitalWrite(backlightPin, HIGH);
+  backlightState = 1;
   
   WiFi.begin(ssid, psk);
 
@@ -149,9 +157,10 @@ void setup() {
     delay(500);
 
   tft.setCursor(0,dataFontLineHeight);
-  tft.print(String("Connected at ")+String(WiFi.localIP()));
-  delay(2500);
+  tft.print(String("Connected to ")+String(ssid));
+  delay(4000);
   clearScreen();
+  screenOffTimer = millis();
 }
 
 static char abridged[MAX_CHARS_PER_LINE+1];
@@ -181,19 +190,16 @@ void writeText(int lineNumber, const char* data) {
 }
 
 void eraseText(int lineNumber, const char* data) {
-  tft.setTextColor( colors[ (lineNumber>=STATUS_LINE1)^colorReverse ] );
+  tft.setTextColor( colors[ (lineNumber>=STATUS_LINE1)^informLight ] );
   writeText(lineNumber, data);
 }
 
 void drawText(int lineNumber, const char* data) {
-  tft.setTextColor( colors[ 1^(lineNumber>=STATUS_LINE1)^colorReverse ] );
-  Serial.println("Color "+String(colors[ (lineNumber>=STATUS_LINE1)^colorReverse ]));
+  tft.setTextColor( colors[ 1^(lineNumber>=STATUS_LINE1)^informLight ] );
   writeText(lineNumber, data);
-  Serial.println(String(lineNumber)+String(" ")+String(data));
 }
 
 void displayLine(int lineNumber, const char* data) {
-  Serial.println(String(lineNumber)+" "+String(data));
   char* current = dataLines[lineNumber];
   abridge(abridged, data);
   if (0==strcmp(abridged, current)) { // TODO: font
@@ -368,10 +374,15 @@ void updateBeeper() {
   }
   
     int pitch = beeperTones[beeperState][0];
-    if (pitch>0)
-      tone(beeperPin, pitch);
-    else
-      noTone(beeperPin);
+    if (pitch>0) {
+      //tone(beeperPin, pitch);
+      analogWriteFreq(pitch);
+      analogWrite(beeperPin, 128);
+    }
+    else {
+      analogWrite(beeperPin, 0);
+      //noTone(beeperPin);
+    }
     toneStart = millis();
 }
 
@@ -386,7 +397,8 @@ void startBeeper() {
 void stopBeeper() {
   if (beeperState != BEEPER_OFF) {
     beeperState = BEEPER_OFF;
-    noTone(beeperPin);
+    //noTone(beeperPin);
+    analogWrite(beeperPin, 0);
   }
 }
 
@@ -398,14 +410,17 @@ void updateInformation() {
     informNeeded |= events[i].needInform & ~events[i].didInform;
 
   if (informNeeded & INFORM_LIGHT) {
-    if (!colorReverse) {
-      colorReverse = 1;
+    if (!informLight) {
+      informLight = 1;
       clearScreen();
     }
+    backlightState = 1;
+    digitalWrite(backlightPin, HIGH);
   }
   else {
-    if (colorReverse) {
-      colorReverse = 0;
+    if (informLight) {
+      informLight = 0;
+      screenOffTimer = millis();
       clearScreen();
     }
   }
@@ -432,7 +447,7 @@ void updateInformation() {
   }
   else {
     uint32_t delta = millis()-lastUpdateSuccess;
-    snprintf(buf, MAX_CHARS_PER_LINE, LOCATION_NAME " %ld.%us ago", delta/1000, (unsigned int)((delta/1000)%10));
+    snprintf(buf, MAX_CHARS_PER_LINE, LOCATION_NAME " %lds ago", ((delta+500)/1000));
     displayLine(STATUS_LINE2, buf);
   }
 
@@ -446,7 +461,7 @@ void updateInformation() {
       }
     }
     else {
-      displayLine(2*i, i==0 ? "No weather warnings." : "");
+      displayLine(2*i, i==0 ? (updateFailed ? "Update failed: Will retry." : "No weather warnings." ) : "");
       displayLine(2*i+1, "");
     }
   }
@@ -486,12 +501,18 @@ void monitorWeather() {
     displayLine(STATUS_LINE2, "Loading...");
     XML_reset();
     while (client.connected()) {
+      String line = client.readStringUntil('\n');
+      if (String("\r") == line || String("") == line) // headers done
+        break;
+    }
+    while (client.connected()) {
       if (client.available()) {
         xmlParseChar(client.read());
         //Serial.write(client.read());
       }
-      updateBeeper(); 
     }
+    client.stop();
+    updateBeeper();
     yield();
     if (gotFeed) {
       for (int i=numEvents-1; i>=0; i--) {
@@ -500,35 +521,48 @@ void monitorWeather() {
       }
       Serial.println("Successful read of feed");
       Serial.println(String("Have ") + String(numEvents) + " events");
+      updateFailed = 0;
+      lastUpdateSuccess = millis();
+      curUpdateDelay = delayTime;
     }
+    else {
+      curUpdateDelay = RETRY_TIME;
+      updateFailed = 1;
+    }
+
     if (numEvents>1) {
       // there are so few events that we'll just do a bubble sort
       sortEvents();
     }
 
-    lastUpdateSuccess = millis();
-    curUpdateDelay = delayTime;
-    Serial.println("Updating");
     updateInformation();
   }
   else {
     Serial.println("Connection failed");
     curUpdateDelay = RETRY_TIME;
+    updateFailed = 1;
   }
   lastUpdate = millis();
 }
 
 void handlePressed() {
+  if (!backlightState) {
+    backlightState = 1;
+    digitalWrite(backlightPin, HIGH);
+  }
   if (beeperState != BEEPER_OFF) {
     for(int i=0; i<numEvents; i++)
       events[i].didInform |= INFORM_SOUND;
     stopBeeper();
   }
-  if (colorReverse) {
+  if (informLight) {
     for(int i=0; i<numEvents; i++)
       events[i].didInform |= INFORM_LIGHT;
+    informLight = 0;
+    clearScreen();
     updateInformation();
   }
+  screenOffTimer = millis();
 }
 
 void handleButton() {
@@ -550,14 +584,18 @@ void loop() {
   handleButton();
   yield();
   if (lastUpdate == UNDEF_TIME || (uint32_t)(millis() - lastUpdate) >= curUpdateDelay) {
-    lastUpdate = millis();
     monitorWeather();
   }
   yield();
   updateBeeper();
   yield();
+  if (!informLight && backlightState && (uint32_t)(millis() - screenOffTimer) >= screenOffDelay) {
+    backlightState = 0;
+    digitalWrite(backlightPin, LOW);
+  }
   if ((uint32_t)(millis() - lastInformationUpdate) >= informationUpdateDelay) {
     updateInformation();
   }
+  yield();
 }
 
