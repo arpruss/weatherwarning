@@ -1,16 +1,18 @@
 #include <ESP8266WiFi.h>
 #include <WiFiClientSecure.h>
 #include "quickparse.h"
-#include "sha1.h"
 #include <string.h>
 #include <ctype.h>
 
 #include <TFT_eSPI.h> // https://github.com/Bodmer/TFT_eSPI
 
+#define DEBUGMSG(s) //Serial.println((s))
+
 #define memzero(p,n) memset((p),0,(n))
 
 #define UNDEF_TIME 0xFFFFFFFFu
 #define DEBOUNCE_TIME 50
+
 
 // Display SDO/MISO  to NodeMCU pin D6 (or leave disconnected if not reading TFT)
 // Display LED       to NodeMCU pin VIN (or 5V, see below)
@@ -24,8 +26,8 @@
 //#define TFT_CS   PIN_D8  // Chip select control pin D8
 //#define TFT_DC   PIN_D1  // Data Command control pin
 
-#define LOCATION "TXZ159" // "OKZ070" // "KSZ032" // "TXZ159" // "KSZ032" // 
-#define LOCATION_NAME "McLennan" // "TEST" // "TEST" // 
+#define LOCATION "TXZ159" // "TXZ159" // "OKZ070" // "KSZ032" // "TXZ159" // "KSZ032" // 
+#define LOCATION_NAME "McLennan" // "McLennan" // "TEST" // "TEST" // 
 
 const uint8_t beeperPin = 2; // D0
 const uint8_t buttonPin = 0; // D3
@@ -85,10 +87,10 @@ char psk[PSK_LENGTH] = "password";
 
 //#define MAX_SUMMARY 450
 #define MAX_EVENT 64
-#define HASH_SIZE 20
+#define ID_SIZE 19
 
 typedef struct {
-  uint8_t hash[20]; 
+  char id[ID_SIZE+1]; 
   char event[MAX_EVENT+1]; // empty for empty event
 //  char summary[MAX_SUMMARY+1]; 
   //char effective[26]; 
@@ -109,17 +111,6 @@ EventInfo events[MAX_EVENTS];
 EventInfo curEvent;
 int numEvents = 0;
 
-void hash(uint8_t* hash, char* data) {
-  int len = strlen(data);
-  SHA1_CTX ctx;
-  SHA1Init(&ctx);
-  while(*data) {
-    SHA1Update(&ctx, (const unsigned char*)data, 1);
-    data++;
-  }
-  SHA1Final((unsigned char*)hash, &ctx);
-}
-
 void clearScreen() {
   tft.fillRect(0,0,screenWidth,screenHeight-2*statusFontLineHeight,colors[informLight]);
   tft.fillRect(0,screenHeight-2*statusFontLineHeight,screenWidth,2*statusFontLineHeight,colors[1^informLight]);
@@ -129,7 +120,7 @@ void clearScreen() {
 }
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
 
   numEvents = 0;
   beeperState = BEEPER_OFF;
@@ -161,6 +152,8 @@ void setup() {
   delay(4000);
   clearScreen();
   screenOffTimer = millis();
+
+  DEBUGMSG("Hello!");
 }
 
 static char abridged[MAX_CHARS_PER_LINE+1];
@@ -239,7 +232,7 @@ void storeEvent(int i) {
 }
 
 void storeEventIfNeeded() {
-  Serial.println(curEvent.event);
+  DEBUGMSG(curEvent.event);
   
   if (curEvent.event[0] == 0)
     return;
@@ -252,14 +245,14 @@ void storeEventIfNeeded() {
     curEvent.needInform = 0;
   
   for (int i=0; i<numEvents; i++) {
-    if (0==memcmp(events[i].hash, curEvent.hash, HASH_SIZE)) {
+    if (0==memcmp(events[i].id, curEvent.id, ID_SIZE)) {
       curEvent.didInform = events[i].didInform;
       storeEvent(i);
       return;
     }
   }
 
-  Serial.println("adding");
+  DEBUGMSG("adding");
   if (numEvents < MAX_EVENTS) {
     storeEvent(numEvents);
     numEvents++;
@@ -274,12 +267,12 @@ void storeEventIfNeeded() {
 
 static void XML_callback( char* tagName, char* data, XMLEvent event) {
   if (event == XML_START_TAG && 0==strcmp(tagName, "feed")) {
-    Serial.println("Start feed");
+    DEBUGMSG("Start feed");
     inFeed = 1;
   }
   else if (inFeed) {
     if (event == XML_END_TAG && 0==strcmp(tagName, "feed")) {
-      Serial.println("End feed");
+      DEBUGMSG("End feed");
       inFeed = 0;
       gotFeed = 1;
     }
@@ -288,36 +281,40 @@ static void XML_callback( char* tagName, char* data, XMLEvent event) {
       inEntry = 1;
       haveId = 0;
       memzero(&curEvent, sizeof(EventInfo));
-      Serial.println("Start entry");
+      DEBUGMSG("Start entry");
     }
     else if (inEntry) {
       if (event == XML_END_TAG && 0==strcmp(tagName, "entry")) {
         if (haveId) 
           storeEventIfNeeded();
         inEntry = 0;
-        Serial.println("End entry");
+        DEBUGMSG("End entry");
       }
       else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "id")) {
-        hash(curEvent.hash, data);
-        char out[31];
-        for (int i=0; i<20; i++) 
-          sprintf(out+2*i, "%02x", curEvent.hash[i]);
-        Serial.println(String("Hash ")+String(out));
+        int len = strlen(data);
+        if (len >= ID_SIZE) {
+          strcpy(curEvent.id, data+len-ID_SIZE);
+        }
+        else {
+          strcpy(curEvent.id, data);
+          memset(curEvent.id+len, 0, ID_SIZE-len);
+        }
+        DEBUGMSG(curEvent.id);
         haveId = 1;
       }
 /*      else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "summary")) {
         strncpy(curEvent.summary, data, MAX_SUMMARY);
-        Serial.println("Summary: ");
-        Serial.println(curEvent.summary);
+        DEBUGMSG("Summary: ");
+        DEBUGMSG(curEvent.summary);
       } */
       else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "cap:event")) {
         for (int i=0; i<MAX_EVENT && data[i]; i++)
           curEvent.event[i] = tolower(data[i]);
-        Serial.println(String("Event: ")+String(curEvent.event));
+        DEBUGMSG(String("Event: ")+String(curEvent.event));
       }
       else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "cap:expires")) {
         strncpy(curEvent.expires, data, 25);
-        Serial.println(String("Expires: ")+String(curEvent.expires));
+        DEBUGMSG(String("Expires: ")+String(curEvent.expires));
       }
       else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "cap:severity")) {
         int i;
@@ -325,30 +322,30 @@ static void XML_callback( char* tagName, char* data, XMLEvent event) {
           if(0==strcasecmp(data, severityList[i]))
             break;
         curEvent.severity = i;
-        Serial.println(String("Severity: ")+String(severityList[i]));
+        DEBUGMSG(String("Severity: ")+String(severityList[i])+" "+String(curEvent.severity));
       }
     }
 /*    if (inEntry && (statusflags & STATUS_TAG_TEXT) && 0==strcmp(tagName, "/http:/entry/cap:severity")) {
-      Serial.println("Severity: ");
-      Serial.println(data);
+      DEBUGMSG("Severity: ");
+      DEBUGMSG(data);
     } */
   }
   /*
   if (statusflags&STATUS_END_TAG) {
-    Serial.println("End tag: ");
-    Serial.println(tagName);
+    DEBUGMSG("End tag: ");
+    DEBUGMSG(tagName);
   }
   if (statusflags&STATUS_TAG_TEXT) {
-    Serial.println("Tag: ");
-    Serial.println(tagName);
-    Serial.println("Data: ");
-    Serial.println(data);
+    DEBUGMSG("Tag: ");
+    DEBUGMSG(tagName);
+    DEBUGMSG("Data: ");
+    DEBUGMSG(data);
   }
   if (statusflags&STATUS_ATTR_TEXT) {
-    Serial.println("Attr: ");
-    Serial.println(tagName);
-    Serial.println("Data: ");
-    Serial.println(data);
+    DEBUGMSG("Attr: ");
+    DEBUGMSG(tagName);
+    DEBUGMSG("Data: ");
+    DEBUGMSG(data);
   } */
 }
 
@@ -479,7 +476,7 @@ void sortEvents() {
   do {
     int newN = 0;
     for (int i=1; i<n; i++) {
-      if (eventCompare(events+i-1,events+i)) {
+      if (eventCompare(events+i-1,events+i)>0) {
         EventInfo t = events[i-1];
         events[i-1] = events[i];
         events[i] = t;
@@ -496,19 +493,20 @@ void monitorWeather() {
   if (client.connect("alerts.weather.gov", 443)) { // TXZ159=McLennan; AZZ015=Flagstaff, AZ
     client.print("GET /cap/wwaatmget.php?x=" LOCATION " HTTP/1.1\r\n"
       "Host: alerts.weather.gov\r\n"
-      "User-Agent: weatherwarningESP8266\r\n"
-      "Connection: close\r\n\r\n"); 
+      "User-Agent: weatherwarning-ESP8266\r\n"
+      "Connection: close\r\n\r\n");  
     displayLine(STATUS_LINE2, "Loading...");
     XML_reset();
     while (client.connected()) {
       String line = client.readStringUntil('\n');
+      DEBUGMSG(line);
       if (String("\r") == line || String("") == line) // headers done
         break;
     }
     while (client.connected()) {
       if (client.available()) {
         xmlParseChar(client.read());
-        //Serial.write(client.read());
+//        Serial.write(client.read());
       }
     }
     client.stop();
@@ -519,13 +517,14 @@ void monitorWeather() {
         if (!events[i].fresh)
           deleteEvent(i);
       }
-      Serial.println("Successful read of feed");
-      Serial.println(String("Have ") + String(numEvents) + " events");
+      DEBUGMSG("Successful read of feed");
+      DEBUGMSG(String("Have ") + String(numEvents) + " events");
       updateFailed = 0;
       lastUpdateSuccess = millis();
       curUpdateDelay = delayTime;
     }
     else {
+      DEBUGMSG("Incomplete");
       curUpdateDelay = RETRY_TIME;
       updateFailed = 1;
     }
@@ -538,7 +537,7 @@ void monitorWeather() {
     updateInformation();
   }
   else {
-    Serial.println("Connection failed");
+    DEBUGMSG("Connection failed");
     curUpdateDelay = RETRY_TIME;
     updateFailed = 1;
   }
