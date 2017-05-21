@@ -619,7 +619,7 @@ void handleButton() {
     lastButtonDown = millis();
     if ((uint32_t)(lastButtonDown - lastButtonUp) >= 3*1000ul) {
       startBeeper();
-      while ((uint32_t)(millis() - lastButtonDown) >= 10*1000ul) {
+      while ((uint32_t)(millis() - lastButtonDown) < 10*1000ul) {
         yield();
         updateBeeper();
       }
