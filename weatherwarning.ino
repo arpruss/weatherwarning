@@ -150,7 +150,8 @@ void setup() {
   tft.print("WeatherWarning for ESP8266");
   digitalWrite(backlightPin, HIGH);
   backlightState = 1;
-  
+
+  WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, psk);
 
   while (WiFi.status() != WL_CONNECTED)
@@ -158,7 +159,7 @@ void setup() {
 
   tft.setCursor(0,dataFontLineHeight);
   tft.print(String("Connected to ")+String(ssid));
-  delay(4000);
+  delay(2500);
   clearScreen();
   screenOffTimer = millis();
 
