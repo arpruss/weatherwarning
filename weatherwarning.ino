@@ -6,13 +6,18 @@
 
 #include <TFT_eSPI.h> // https://github.com/Bodmer/TFT_eSPI
 
+#undef OLD_API // TODO: Api changeover around September 2017
+#define LOCATION "TXZ159" // "TXZ159" 
+#define LOCATION_NAME "McLennan" // "McLennan" // "TEST" // "TEST" // 
+#define TIMEZONE -6*60
+#define DST_ADJUST 1
+
 #define DEBUGMSG(s) Serial.println((s))
 
 #define memzero(p,n) memset((p),0,(n))
 
 #define UNDEF_TIME 0xFFFFFFFFu
 #define DEBOUNCE_TIME 50
-
 
 // Display SDO/MISO  // to NodeMCU pin D6 (or leave disconnected if not reading TFT)
 // Display LED       to NodeMCU pin VIN (or 5V, see below)
@@ -25,9 +30,6 @@
 // Display VCC       to NodeMCU 5V or 3.3V
 //#define TFT_CS   PIN_D8  // Chip select control pin D8
 //#define TFT_DC   PIN_D1  // Data Command control pin
-
-#define LOCATION "TXZ159" // "TXZ179" // "TXZ159" // "OKZ070" // "KSZ032" // "TXZ159" // "KSZ032" // 
-#define LOCATION_NAME "McLennan" // "McLennan" // "TEST" // "TEST" // 
 
 const uint8_t beeperPin = 12; // D6 // 2; // D4
 const uint8_t buttonPin = 0; // D3
@@ -91,14 +93,14 @@ char psk[PSK_LENGTH] = "password";
 
 //#define MAX_SUMMARY 450
 #define MAX_EVENT 64
-#define ID_SIZE 19
+#define ID_SIZE 22
 
 typedef struct {
   char id[ID_SIZE+1]; 
   char event[MAX_EVENT+1]; // empty for empty event
 //  char summary[MAX_SUMMARY+1]; 
   //char effective[26]; 
-  char expires[26];
+  time_t expires;
   uint8_t needInform;
   uint8_t didInform;
   uint8_t severity;
@@ -317,8 +319,9 @@ static void XML_callback( char* tagName, char* data, XMLEvent event) {
         DEBUGMSG(String("Event: ")+String(curEvent.event));
       }
       else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "cap:expires")) {
-        strncpy(curEvent.expires, data, 25);
-        DEBUGMSG(String("Expires: ")+String(curEvent.expires));
+        DEBUGMSG(String("Expires: ")+data);
+        curEvent.expires = nwsToUTC(data);
+        DEBUGMSG(String("Expires: ")+String( formatTime(curEvent.expires, TIMEZONE, DST_ADJUST) ));
       }
       else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "cap:severity")) {
         int i;
@@ -351,15 +354,6 @@ static void XML_callback( char* tagName, char* data, XMLEvent event) {
     DEBUGMSG("Data: ");
     DEBUGMSG(data);
   } */
-}
-
-void formatTime(char* buf, const char* t) {
-  strncpy(buf, t+5, 2);
-  buf[2] = '/';
-  strncpy(buf+3, t+8, 2);
-  buf[5] = ' ';
-  strncpy(buf+6, t+11, 5);
-  buf[6+5] = 0;
 }
 
 void updateBeeper() {
@@ -474,9 +468,8 @@ void updateInformation() {
   for (int i=0; 2*i < numDataLines; i++) {
     if (i<numEvents) {
       displayLine(2*i, events[i].event);
-      if (strlen(events[i].expires)>11) {
-        strcpy(buf, "expires ");
-        formatTime(buf+8, events[i].expires);
+      if (0 != events[i].expires) {
+        snprintf(buf, MAX_CHARS_PER_LINE+1, "expires %s", formatTime(events[i].expires, TIMEZONE, DST_ADJUST));
         displayLine(2*i+1, buf);
       }
     }
@@ -524,17 +517,20 @@ void failureUpdate() {
 void monitorWeather() {
   WiFiClientSecure client;
   displayLine(STATUS_LINE2, "Connecting...");
-/*  if (client.connect("alerts.weather.gov", 443)) { // TXZ159=McLennan; AZZ015=Flagstaff, AZ
+#ifdef OLD_API  
+    if (client.connect("alerts.weather.gov", 443)) { // TXZ159=McLennan; AZZ015=Flagstaff, AZ
     client.print("GET /cap/wwaatmget.php?x=" LOCATION " HTTP/1.1\r\n"
       "Host: alerts.weather.gov\r\n"
       "User-Agent: weatherwarning-ESP8266\r\n"
-      "Connection: close\r\n\r\n");  */
+      "Connection: close\r\n\r\n");  
+#else
     if (client.connect("api.weather.gov", 443)) { // TXZ159=McLennan; AZZ015=Flagstaff, AZ
     client.print("GET /alerts/active?zone=" LOCATION " HTTP/1.1\r\n"
       "Host: api.weather.gov\r\n"
       "User-Agent: weatherwarning-ESP8266-arpruss@gmail.com\r\n"
       "Accept: application/atom+xml\r\n"
-      "Connection: close\r\n\r\n");  // TODO: alerts-v2???
+      "Connection: close\r\n\r\n");  // TODO: alerts-v2??? */
+#endif      
     displayLine(STATUS_LINE2, "Loading...");
     XML_reset();
     while (client.connected()) {
@@ -547,7 +543,7 @@ void monitorWeather() {
       if (client.available()) {
         char c = client.read();
         xmlParseChar(c);
-        Serial.write(c);
+        //Serial.write(c);
       }
     }
     client.stop();
