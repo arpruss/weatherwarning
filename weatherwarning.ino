@@ -63,7 +63,10 @@ int beeperState;
 #define numDataLines ((screenHeight-2*statusFontLineHeight)/dataFontLineHeight)
 uint32_t lastInformationUpdate = UNDEF_TIME;
 
-int colors[2] = { 0x0000, 0xFFFF };
+#define COLOR565(r,g,b) ( (((r)>>11)<<11) | ( ((g)>>10)<<5 ) | ( (b)>>11 ) )
+
+int dataColors[2][2] = { { TFT_BLACK, TFT_WHITE }, { TFT_YELLOW, TFT_BLACK } };
+int statusColors[2] = { TFT_BLUE, TFT_WHITE };
 uint8_t informLight = 0;
 
 #define MAX_CHARS_PER_LINE (screenWidth / (dataFontCharWidth<statusFontCharWidth ? dataFontCharWidth : statusFontCharWidth))
@@ -118,8 +121,8 @@ EventInfo curEvent;
 int numEvents = 0;
 
 void clearScreen() {
-  tft.fillRect(0,0,screenWidth,screenHeight-2*statusFontLineHeight,colors[informLight]);
-  tft.fillRect(0,screenHeight-2*statusFontLineHeight,screenWidth,2*statusFontLineHeight,colors[1^informLight]);
+  tft.fillRect(0,0,screenWidth,screenHeight-2*statusFontLineHeight,dataColors[informLight][0]);
+  tft.fillRect(0,screenHeight-2*statusFontLineHeight,screenWidth,2*statusFontLineHeight,statusColors[0]);
   for (int i=0; i<sizeof(dataLines)/sizeof(*dataLines); i++) {
     dataLines[i][0] = 0;
   }
@@ -141,8 +144,8 @@ void setup() {
   tft.begin();
   
   tft.setRotation(1);
-  tft.fillScreen(colors[0]);
-  tft.setTextColor(colors[1]);
+  tft.fillScreen(statusColors[0]);
+  tft.setTextColor(statusColors[1]);
   tft.setCursor(0,0);
   tft.print("WeatherWarning for ESP8266");
   digitalWrite(backlightPin, HIGH);
@@ -189,12 +192,18 @@ void writeText(int lineNumber, const char* data) {
 }
 
 void eraseText(int lineNumber, const char* data) {
-  tft.setTextColor( colors[ (lineNumber>=STATUS_LINE1)^informLight ] );
+  if (lineNumber>=STATUS_LINE1) 
+    tft.setTextColor( statusColors[0] );
+  else
+    tft.setTextColor( dataColors[informLight][0] );
   writeText(lineNumber, data);
 }
 
 void drawText(int lineNumber, const char* data) {
-  tft.setTextColor( colors[ 1^(lineNumber>=STATUS_LINE1)^informLight ] );
+  if (lineNumber>=STATUS_LINE1) 
+    tft.setTextColor( statusColors[1] );
+  else
+    tft.setTextColor( dataColors[informLight][1] );
   writeText(lineNumber, data);
 }
 
@@ -220,6 +229,8 @@ void XML_reset() {
   inEntry = 0;
   gotFeed = 0;
   tooMany = 0;
+  for (int i=0; i<numEvents; i++)
+    events[i].fresh = 0;
   xmlParseInit(XML_callback, tagBuffer, sizeof(tagBuffer), dataBuffer, sizeof(dataBuffer));
 }
 
@@ -248,7 +259,7 @@ void storeEventIfNeeded() {
   else if (curEvent.severity == 1 || curEvent.severity == ARRAY_LEN(severityList) - 1 )
     curEvent.needInform = INFORM_LIGHT;
   else
-    curEvent.needInform = 0; // 
+    curEvent.needInform = 0;
   
   for (int i=0; i<numEvents; i++) {
     if (0==memcmp(events[i].id, curEvent.id, ID_SIZE)) {
@@ -549,6 +560,7 @@ void monitorWeather() {
     client.stop();
     updateBeeper();
     yield();
+
     if (gotFeed) {
       for (int i=numEvents-1; i>=0; i--) {
         if (!events[i].fresh)
@@ -566,10 +578,6 @@ void monitorWeather() {
       updateFailed = 1;
     }
 
-    if (numEvents>1) {
-      // there are so few events that we'll just do a bubble sort
-      sortEvents();
-    }
   }
   else {
     DEBUGMSG("Connection failed");
@@ -577,6 +585,11 @@ void monitorWeather() {
     updateFailed = 1;
   }
   
+  if (numEvents>1) {
+    // there are so few events that we'll just do a bubble sort
+    sortEvents();
+  }
+
   lastUpdate = millis();
   
   updateInformation();
