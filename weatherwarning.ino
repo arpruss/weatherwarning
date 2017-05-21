@@ -6,7 +6,7 @@
 
 #include <TFT_eSPI.h> // https://github.com/Bodmer/TFT_eSPI
 
-#define DEBUGMSG(s) //Serial.println((s))
+#define DEBUGMSG(s) Serial.println((s))
 
 #define memzero(p,n) memset((p),0,(n))
 
@@ -14,7 +14,7 @@
 #define DEBOUNCE_TIME 50
 
 
-// Display SDO/MISO  to NodeMCU pin D6 (or leave disconnected if not reading TFT)
+// Display SDO/MISO  // to NodeMCU pin D6 (or leave disconnected if not reading TFT)
 // Display LED       to NodeMCU pin VIN (or 5V, see below)
 // Display SCK       to NodeMCU pin D5
 // Display SDI/MOSI  to NodeMCU pin D7
@@ -26,23 +26,27 @@
 //#define TFT_CS   PIN_D8  // Chip select control pin D8
 //#define TFT_DC   PIN_D1  // Data Command control pin
 
-#define LOCATION "TXZ159" // "TXZ159" // "OKZ070" // "KSZ032" // "TXZ159" // "KSZ032" // 
+#define LOCATION "TXZ159" // "TXZ179" // "TXZ159" // "OKZ070" // "KSZ032" // "TXZ159" // "KSZ032" // 
 #define LOCATION_NAME "McLennan" // "McLennan" // "TEST" // "TEST" // 
 
-const uint8_t beeperPin = 2; // D0
+const uint8_t beeperPin = 12; // D6 // 2; // D4
 const uint8_t buttonPin = 0; // D3
 const uint8_t ledPin = 16; // D0
 const uint8_t backlightPin = 4; // D2
 const uint8_t ledReverse = 1; 
+uint8_t noConnectionWarningLight = 0;
 const int beeperTones[][2] = { { 800, 500 }, {0, 700} };
 const uint32_t delayTime = 120000ul; // in milliseconds
 const uint32_t informationUpdateDelay = 1000;
 const uint32_t screenOffDelay = 30000ul;
+const uint32_t noConnectionWarnDelay = 60ul*60000ul; // warn after an hour of failure to connect
+uint32_t noConnectionWarnTimer = UNDEF_TIME;
 uint32_t toneStart = UNDEF_TIME;
 uint32_t lastUpdate = UNDEF_TIME;
 uint32_t lastUpdateSuccess = UNDEF_TIME;
 uint32_t curUpdateDelay = delayTime;
 uint32_t lastButtonDown = UNDEF_TIME;
+uint32_t lastButtonUp = UNDEF_TIME;
 uint32_t screenOffTimer = UNDEF_TIME;
 uint8_t buttonState = 0;
 uint8_t backlightState = 0;
@@ -77,7 +81,7 @@ TFT_eSPI tft = TFT_eSPI();
 #define SSID_LENGTH 33
 #define PSK_LENGTH  64
 #if 1
-#include "c:/users/alexander/Documents/Arduino/private.h"
+#include "c:/users/alexander_pruss/Documents/Arduino/private.h"
 #else
 char ssid[SSID_LENGTH] = "SSID";
 char psk[PSK_LENGTH] = "password";
@@ -242,7 +246,7 @@ void storeEventIfNeeded() {
   else if (curEvent.severity == 1 || curEvent.severity == ARRAY_LEN(severityList) - 1 )
     curEvent.needInform = INFORM_LIGHT;
   else
-    curEvent.needInform = 0;
+    curEvent.needInform = 0; // 
   
   for (int i=0; i<numEvents; i++) {
     if (0==memcmp(events[i].id, curEvent.id, ID_SIZE)) {
@@ -399,12 +403,30 @@ void stopBeeper() {
   }
 }
 
+char durationBuf[20];
+
+char* formatDuration(uint32_t t) {
+  if (t < 1000ul*60*3) {
+    snprintf(durationBuf, 19, "%lds", (t/1000));
+  }
+  else if (t < 1000ul*60*180) {
+    snprintf(durationBuf, 19, "%ldmin", (t/(1000ul*60)));
+  }
+  else {
+    snprintf(durationBuf, 19, "%ldhrs", (t/(1000ul*60*60)));
+  }
+  return durationBuf;
+}
+
 char buf[MAX_CHARS_PER_LINE+1];
 
 void updateInformation() {
   uint8_t informNeeded = 0;
   for (int i=0; i<numEvents; i++)
     informNeeded |= events[i].needInform & ~events[i].didInform;
+
+  if (noConnectionWarningLight)
+    informNeeded |= INFORM_LIGHT;
 
   if (informNeeded & INFORM_LIGHT) {
     if (!informLight) {
@@ -429,7 +451,7 @@ void updateInformation() {
     stopBeeper();
   }
   
-  digitalWrite(ledPin, ledReverse^(numEvents>0));
+  digitalWrite(ledPin, ledReverse^(numEvents>0 || informLight));
   
   if (numEvents > numDataLines/2) {
     snprintf(buf, MAX_CHARS_PER_LINE, "+ %d more events", numEvents-numDataLines/2);
@@ -438,13 +460,14 @@ void updateInformation() {
   else {
     displayLine(STATUS_LINE1, "");
   }
-  
-  if (lastUpdateSuccess == UNDEF_TIME) {
+
+  if (lastUpdateSuccess == UNDEF_TIME && ! noConnectionWarningLight) {
     displayLine(STATUS_LINE2, "No data received yet.");
   }
   else {
     uint32_t delta = millis()-lastUpdateSuccess;
-    snprintf(buf, MAX_CHARS_PER_LINE, LOCATION_NAME " %lds ago", ((delta+500)/1000));
+    const char *fmt = noConnectionWarningLight ? "No connect in %s" : LOCATION_NAME " %s ago";
+    snprintf(buf, MAX_CHARS_PER_LINE, fmt, formatDuration(delta));
     displayLine(STATUS_LINE2, buf);
   }
 
@@ -487,14 +510,31 @@ void sortEvents() {
   } while(n>0);
 }
 
+void failureUpdate() {
+  if (updateFailed) {
+    if (noConnectionWarnTimer == UNDEF_TIME) {
+      noConnectionWarnTimer = millis();
+    }
+    else if ((uint32_t)(millis()-noConnectionWarnTimer) >= noConnectionWarnDelay) {
+      noConnectionWarningLight = 1;
+    }
+  }  
+}
+
 void monitorWeather() {
   WiFiClientSecure client;
   displayLine(STATUS_LINE2, "Connecting...");
-  if (client.connect("alerts.weather.gov", 443)) { // TXZ159=McLennan; AZZ015=Flagstaff, AZ
+/*  if (client.connect("alerts.weather.gov", 443)) { // TXZ159=McLennan; AZZ015=Flagstaff, AZ
     client.print("GET /cap/wwaatmget.php?x=" LOCATION " HTTP/1.1\r\n"
       "Host: alerts.weather.gov\r\n"
       "User-Agent: weatherwarning-ESP8266\r\n"
-      "Connection: close\r\n\r\n");  
+      "Connection: close\r\n\r\n");  */
+    if (client.connect("api.weather.gov", 443)) { // TXZ159=McLennan; AZZ015=Flagstaff, AZ
+    client.print("GET /alerts/active?zone=" LOCATION " HTTP/1.1\r\n"
+      "Host: api.weather.gov\r\n"
+      "User-Agent: weatherwarning-ESP8266-arpruss@gmail.com\r\n"
+      "Accept: application/atom+xml\r\n"
+      "Connection: close\r\n\r\n");  // TODO: alerts-v2???
     displayLine(STATUS_LINE2, "Loading...");
     XML_reset();
     while (client.connected()) {
@@ -505,8 +545,9 @@ void monitorWeather() {
     }
     while (client.connected()) {
       if (client.available()) {
-        xmlParseChar(client.read());
-//        Serial.write(client.read());
+        char c = client.read();
+        xmlParseChar(c);
+        Serial.write(c);
       }
     }
     client.stop();
@@ -533,15 +574,18 @@ void monitorWeather() {
       // there are so few events that we'll just do a bubble sort
       sortEvents();
     }
-
-    updateInformation();
   }
   else {
     DEBUGMSG("Connection failed");
     curUpdateDelay = RETRY_TIME;
     updateFailed = 1;
   }
+  
   lastUpdate = millis();
+  
+  updateInformation();
+
+  failureUpdate();
 }
 
 void handlePressed() {
@@ -558,9 +602,11 @@ void handlePressed() {
     for(int i=0; i<numEvents; i++)
       events[i].didInform |= INFORM_LIGHT;
     informLight = 0;
+    noConnectionWarningLight = 0;
     clearScreen();
     updateInformation();
   }
+  noConnectionWarnTimer = UNDEF_TIME;
   screenOffTimer = millis();
 }
 
@@ -571,8 +617,17 @@ void handleButton() {
        handlePressed();
     }  
     lastButtonDown = millis();
+    if ((uint32_t)(lastButtonDown - lastButtonUp) >= 3*1000ul) {
+      startBeeper();
+      while ((uint32_t)(millis() - lastButtonDown) >= 10*1000ul) {
+        yield();
+        updateBeeper();
+      }
+      stopBeeper();
+    }
   }
   else {
+    lastButtonUp = millis();
     if (buttonState && millis() >= lastButtonDown + DEBOUNCE_TIME) {
       buttonState = 0;
     }
@@ -592,6 +647,7 @@ void loop() {
     backlightState = 0;
     digitalWrite(backlightPin, LOW);
   }
+  failureUpdate();
   if ((uint32_t)(millis() - lastInformationUpdate) >= informationUpdateDelay) {
     updateInformation();
   }
