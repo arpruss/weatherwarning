@@ -19,31 +19,34 @@
 #define UNDEF_TIME 0xFFFFFFFFu
 #define DEBOUNCE_TIME 50
 
-// Display SDO/MISO  // to NodeMCU pin D6 (or leave disconnected if not reading TFT)
-// Display LED       to NodeMCU pin VIN (or 5V, see below)
-// Display SCK       to NodeMCU pin D5
-// Display SDI/MOSI  to NodeMCU pin D7
-// Display DC (RS/AO)to NodeMCU pin D1 // GPIO5
-// Display RESET     to +3.3V // was: to NodeMCU pin D4 (or RST, see below)
-// Display CS        to NodeMCU pin D8 (or GND, see below)
-// Display GND       to NodeMCU pin GND (0V)
-// Display VCC       to NodeMCU 5V or 3.3V
+// Display pins:
+// Display SDO/MISO  unconnected
+// Display LED       NodeMCU pin VIN (or 5V, see below)
+// Display SCK       NodeMCU pin D5
+// Display SDI/MOSI  NodeMCU pin D7
+// Display DC (RS/AO)NodeMCU pin D1 // GPIO5
+// Display RESET     +3.3V 
+// Display CS        GND
+// Display GND       NodeMCU pin GND (0V)
+// Display VCC       NodeMCU 5V or 3.3V
 //#define TFT_CS   PIN_D8  // Chip select control pin D8
 //#define TFT_DC   PIN_D1  // Data Command control pin
 
-const uint8_t beeperPin = 12; // D6 // 2; // D4
+const uint8_t beeperPin = 12; // D6 
 const uint8_t buttonPin = 0; // D3
 const uint8_t ledPin = 16; // D0
 const uint8_t backlightPin = 4; // D2
+
 const uint8_t ledReverse = 1; 
-uint8_t noConnectionWarningLight = 0;
 const int beeperTones[][2] = { { 800, 500 }, {0, 700} };
 const uint32_t informationUpdateDelay = 1000;
 const uint32_t screenOffDelay = 30000ul;
 const uint32_t retryDelays[] = { 120000ul, 25000ul, 25000ul, 60000ul, 120000ul }; // retryDelays[n] is how to long to wait if this is the nth retry; retryDelays[0] is the default wait period
 #define NUM_RETRY_DELAYS (sizeof retryDelays / sizeof *retryDelays)
-uint32_t retry = 0;
 const uint32_t warnRetryCount = 10; // warn after 10 retries
+
+uint32_t retry = 0;
+uint8_t noConnectionWarningLight = 0;
 uint32_t toneStart = UNDEF_TIME;
 uint32_t lastUpdate = UNDEF_TIME;
 uint32_t lastUpdateSuccess = UNDEF_TIME;
