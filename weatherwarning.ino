@@ -38,21 +38,20 @@ const uint8_t backlightPin = 4; // D2
 const uint8_t ledReverse = 1; 
 uint8_t noConnectionWarningLight = 0;
 const int beeperTones[][2] = { { 800, 500 }, {0, 700} };
-const uint32_t delayTime = 120000ul; // in milliseconds
 const uint32_t informationUpdateDelay = 1000;
 const uint32_t screenOffDelay = 30000ul;
-const uint32_t noConnectionWarnDelay = 60ul*60000ul; // warn after an hour of failure to connect
-uint32_t noConnectionWarnTimer = UNDEF_TIME;
+const uint32_t retryDelays[] = { 120000ul, 25000ul, 25000ul, 60000ul, 120000ul }; // retryDelays[n] is how to long to wait if this is the nth retry; retryDelays[0] is the default wait period
+#define NUM_RETRY_DELAYS (sizeof retryDelays / sizeof *retryDelays)
+uint32_t retry = 0;
+const uint32_t warnRetryCount = 10; // warn after 10 retries
 uint32_t toneStart = UNDEF_TIME;
 uint32_t lastUpdate = UNDEF_TIME;
 uint32_t lastUpdateSuccess = UNDEF_TIME;
-uint32_t curUpdateDelay = delayTime;
 uint32_t lastButtonDown = UNDEF_TIME;
 uint32_t lastButtonUp = UNDEF_TIME;
 uint32_t screenOffTimer = UNDEF_TIME;
 uint8_t buttonState = 0;
 uint8_t backlightState = 0;
-uint8_t updateFailed = 0;
 int beeperState;
 #define screenHeight 128
 #define screenWidth  160
@@ -77,8 +76,6 @@ char dataLines[numDataLines+2][MAX_CHARS_PER_LINE+1];
 TFT_eSPI tft = TFT_eSPI();
 
 #define BEEPER_OFF -1
-
-#define RETRY_TIME 25000
 
 #define INFORM_LIGHT 1
 #define INFORM_SOUND 2
@@ -134,7 +131,7 @@ void setup() {
   numEvents = 0;
   beeperState = BEEPER_OFF;
   lastUpdate = UNDEF_TIME;
-  curUpdateDelay = delayTime;
+  retry = 0;
 
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(beeperPin, OUTPUT);
@@ -486,7 +483,7 @@ void updateInformation() {
       }
     }
     else {
-      displayLine(2*i, i==0 ? (updateFailed ? "Update failed: Will retry." : "No weather warnings." ) : "");
+      displayLine(2*i, i==0 ? (retry != 0 ? "Update failed: Will retry." : "No weather warnings." ) : "");
       displayLine(2*i+1, "");
     }
   }
@@ -515,15 +512,23 @@ void sortEvents() {
   } while(n>0);
 }
 
-void failureUpdate() {
-  if (updateFailed) {
-    if (noConnectionWarnTimer == UNDEF_TIME) {
-      noConnectionWarnTimer = millis();
-    }
-    else if ((uint32_t)(millis()-noConnectionWarnTimer) >= noConnectionWarnDelay) {
-      noConnectionWarningLight = 1;
-    }
-  }  
+uint32_t currentDelay() {
+  if (retry < NUM_RETRY_DELAYS) {
+    return retryDelays[retry];
+  }
+  else {
+    return retryDelays[NUM_RETRY_DELAYS-1];
+  }
+}
+
+
+void failureUpdateCheck() {
+  if (retry >= warnRetryCount) {
+    noConnectionWarningLight = 1;
+  }
+  else {
+    noConnectionWarningLight = 0;
+  }
 }
 
 void monitorWeather() {
@@ -569,21 +574,17 @@ void monitorWeather() {
       }
       DEBUGMSG("Successful read of feed");
       DEBUGMSG(String("Have ") + String(numEvents) + " events");
-      updateFailed = 0;
       lastUpdateSuccess = millis();
-      curUpdateDelay = delayTime;
+      retry = 0;
     }
     else {
       DEBUGMSG("Incomplete");
-      curUpdateDelay = RETRY_TIME;
-      updateFailed = 1;
+      retry++;
     }
-
   }
   else {
     DEBUGMSG("Connection failed");
-    curUpdateDelay = RETRY_TIME;
-    updateFailed = 1;
+    retry++;
   }
   
   if (numEvents>1) {
@@ -593,9 +594,9 @@ void monitorWeather() {
 
   lastUpdate = millis();
   
-  updateInformation();
+  failureUpdateCheck();
 
-  failureUpdate();
+  updateInformation();
 }
 
 void handlePressed() {
@@ -616,7 +617,8 @@ void handlePressed() {
     clearScreen();
     updateInformation();
   }
-  noConnectionWarnTimer = UNDEF_TIME;
+  if (retry >= warnRetryCount) 
+    retry = NUM_RETRY_DELAYS - 1;
   screenOffTimer = millis();
 }
 
@@ -647,7 +649,7 @@ void handleButton() {
 void loop() {
   handleButton();
   yield();
-  if (lastUpdate == UNDEF_TIME || (uint32_t)(millis() - lastUpdate) >= curUpdateDelay) {
+  if (lastUpdate == UNDEF_TIME || (uint32_t)(millis() - lastUpdate) >= currentDelay()) {
     monitorWeather();
   }
   yield();
@@ -657,7 +659,7 @@ void loop() {
     backlightState = 0;
     digitalWrite(backlightPin, LOW);
   }
-  failureUpdate();
+  failureUpdateCheck();
   if ((uint32_t)(millis() - lastInformationUpdate) >= informationUpdateDelay) {
     updateInformation();
   }
