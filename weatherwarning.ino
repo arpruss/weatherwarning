@@ -24,9 +24,9 @@
 // Display LED       NodeMCU pin VIN (or 5V, see below)
 // Display SCK       NodeMCU pin D5
 // Display SDI/MOSI  NodeMCU pin D7
-// Display DC (RS/AO)NodeMCU pin D1 // GPIO5
-// Display RESET     +3.3V 
-// Display CS        GND
+// Display DC (RS/AO)NodeMCU pin D1 
+// Display RESET     NodeMCU pin D4
+// Display CS        D8
 // Display GND       NodeMCU pin GND (0V)
 // Display VCC       NodeMCU 5V or 3.3V
 //#define TFT_CS   PIN_D8  // Chip select control pin D8
@@ -139,10 +139,11 @@ void setup() {
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(beeperPin, OUTPUT);
   pinMode(ledPin, OUTPUT);
-  pinMode(backlightPin, OUTPUT);
   digitalWrite(ledPin, ledReverse);
+
+  delay(500);
+  pinMode(backlightPin, OUTPUT);
   tft.begin();
-  
   tft.setRotation(1);
   tft.fillScreen(statusColors[0]);
   tft.setTextColor(statusColors[1]);
@@ -634,11 +635,14 @@ void handleButton() {
     lastButtonDown = millis();
     if ((uint32_t)(lastButtonDown - lastButtonUp) >= 3*1000ul) {
       startBeeper();
+      digitalWrite(ledPin, !ledReverse);
       while ((uint32_t)(millis() - lastButtonDown) < 10*1000ul) {
         yield();
         updateBeeper();
       }
       stopBeeper();
+      digitalWrite(ledPin, ledReverse);
+      updateInformation();
     }
   }
   else {
