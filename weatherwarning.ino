@@ -6,13 +6,19 @@
 
 #include <TFT_eSPI.h> // https://github.com/Bodmer/TFT_eSPI
 
+#undef DEBUG
 #undef OLD_API // TODO: Api changeover around September 2017
 #define LOCATION "TXZ159" // "TXZ159" 
 #define LOCATION_NAME "McLennan" // "McLennan" // "TEST" // "TEST" // 
 #define TIMEZONE -6*60
 #define DST_ADJUST 1
 
-#define DEBUGMSG(s) Serial.println((s))
+
+#ifdef DEBUG
+# define DEBUGMSG(s) 
+#else
+# define DEBUGMSG(s) Serial.println((s))
+#endif
 
 #define memzero(p,n) memset((p),0,(n))
 
@@ -36,6 +42,9 @@ const uint8_t beeperPin = 12; // D6
 const uint8_t buttonPin = 0; // D3
 const uint8_t ledPin = 16; // D0
 const uint8_t backlightPin = 4; // D2
+const uint8_t powerLedPin = 2;
+const uint16_t backlightBright = 512; // 1023 max
+const uint16_t backlightDim = 10; // 1023 max
 
 const uint8_t ledReverse = 1; 
 const int beeperTones[][2] = { { 800, 500 }, {0, 700} };
@@ -128,8 +137,17 @@ void clearScreen() {
   }
 }
 
+void backlight(char state) {
+  if (state != backlightState) {
+    analogWrite(backlightPin, state ? backlightBright : backlightDim);
+    backlightState = state;  
+  }
+}
+
 void setup() {
+#ifdef DEBUG
   Serial.begin(115200);
+#endif
 
   numEvents = 0;
   beeperState = BEEPER_OFF;
@@ -140,17 +158,19 @@ void setup() {
   pinMode(beeperPin, OUTPUT);
   pinMode(ledPin, OUTPUT);
   digitalWrite(ledPin, ledReverse);
+  pinMode(backlightPin, OUTPUT);
+  digitalWrite(backlightPin, 0);
 
   delay(500);
-  pinMode(backlightPin, OUTPUT);
+  backlightState = 0;
+  backlight(1);
+  
   tft.begin();
   tft.setRotation(1);
   tft.fillScreen(statusColors[0]);
   tft.setTextColor(statusColors[1]);
   tft.setCursor(0,0);
   tft.print("WeatherWarning for ESP8266");
-  digitalWrite(backlightPin, HIGH);
-  backlightState = 1;
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, psk);
@@ -440,8 +460,7 @@ void updateInformation() {
       informLight = 1;
       clearScreen();
     }
-    backlightState = 1;
-    digitalWrite(backlightPin, HIGH);
+    backlight(1);
   }
   else {
     if (informLight) {
@@ -458,7 +477,7 @@ void updateInformation() {
     stopBeeper();
   }
   
-  digitalWrite(ledPin, ledReverse^(numEvents>0 || informLight));
+  //digitalWrite(ledPin, ledReverse^(numEvents>0 || informLight));
   
   if (numEvents > numDataLines/2) {
     snprintf(buf, MAX_CHARS_PER_LINE, "+ %d more events", numEvents-numDataLines/2);
@@ -604,10 +623,7 @@ void monitorWeather() {
 }
 
 void handlePressed() {
-  if (!backlightState) {
-    backlightState = 1;
-    digitalWrite(backlightPin, HIGH);
-  }
+  backlight(1);
   if (beeperState != BEEPER_OFF) {
     for(int i=0; i<numEvents; i++)
       events[i].didInform |= INFORM_SOUND;
@@ -663,8 +679,7 @@ void loop() {
   updateBeeper();
   yield();
   if (!informLight && backlightState && (uint32_t)(millis() - screenOffTimer) >= screenOffDelay) {
-    backlightState = 0;
-    digitalWrite(backlightPin, LOW);
+    backlight(0);
   }
   failureUpdateCheck();
   if ((uint32_t)(millis() - lastInformationUpdate) >= informationUpdateDelay) {
