@@ -6,7 +6,7 @@
 
 #include <TFT_eSPI.h> // https://github.com/Bodmer/TFT_eSPI
 
-#undef DEBUG
+#define DEBUG
 #undef OLD_API // TODO: Api changeover around September 2017
 #define LOCATION "TXZ159" //"TXZ159" // "TXZ159" 
 #define LOCATION_NAME "McLennan" // "McLennan" // "TEST" // "TEST" // 
@@ -264,9 +264,23 @@ void deleteEvent(int i) {
   numEvents--;
 }
 
+uint8_t match(EventInfo& e1) {
+  if(0==memcmp(e1.id, curEvent.id, ID_SIZE))
+    return 1;
+  if(0==strcmp(e1.event, curEvent.event) && e1.severity == curEvent.severity)
+    return 1;
+  return 0;
+}
+
 void storeEvent(int i) {
+  if (match(events[i]) && events[i].fresh) {
+    if (events[i].expires > curEvent.expires)
+      curEvent.expires = events[i].expires;
+    curEvent.needInform |= events[i].needInform;
+    curEvent.didInform |= events[i].didInform;
+  }
+  
   events[i] = curEvent;
-//  events[i].didInform = 0;
   events[i].fresh = 1;
 }
 
@@ -286,7 +300,7 @@ void storeEventIfNeeded() {
     curEvent.needInform = 0;
   
   for (int i=0; i<numEvents; i++) {
-    if (0==memcmp(events[i].id, curEvent.id, ID_SIZE)) {
+    if (match(events[i])) {
       curEvent.didInform = events[i].didInform;
       storeEvent(i);
       DEBUGMSG(String("match ")+i+" didInform "+events[i].didInform);
@@ -341,7 +355,7 @@ static void XML_callback( char* tagName, char* data, XMLEvent event) {
           strcpy(curEvent.id, data);
           memset(curEvent.id+len, 0, ID_SIZE-len);
         }
-        DEBUGMSG(curEvent.id);
+        DEBUGMSG(String("ID:")+curEvent.id);
         haveId = 1;
       }
 /*      else if (event == XML_TAG_TEXT && 0==strcmp(tagName, "summary")) {
