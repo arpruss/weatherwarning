@@ -8,13 +8,13 @@
 
 #undef DEBUG
 #undef OLD_API // TODO: Api changeover around September 2017
-#define LOCATION "TXZ159" // "TXZ159" 
+#define LOCATION "TXZ159" //"TXZ159" // "TXZ159" 
 #define LOCATION_NAME "McLennan" // "McLennan" // "TEST" // "TEST" // 
 #define TIMEZONE -6*60
 #define DST_ADJUST 1
 
 
-#ifdef DEBUG
+#ifndef DEBUG
 # define DEBUGMSG(s) 
 #else
 # define DEBUGMSG(s) Serial.println((s))
@@ -266,7 +266,7 @@ void deleteEvent(int i) {
 
 void storeEvent(int i) {
   events[i] = curEvent;
-  events[i].didInform = 0;
+//  events[i].didInform = 0;
   events[i].fresh = 1;
 }
 
@@ -275,11 +275,13 @@ void storeEventIfNeeded() {
   
   if (curEvent.event[0] == 0)
     return;
+
+  curEvent.didInform = 0;
     
   if (NULL != strstr(curEvent.event, "tornado") || curEvent.severity == 0)
     curEvent.needInform = INFORM_LIGHT | INFORM_SOUND;
   else if (curEvent.severity == 1 || curEvent.severity == ARRAY_LEN(severityList) - 1 )
-    curEvent.needInform = INFORM_LIGHT;
+    curEvent.needInform = INFORM_LIGHT; 
   else
     curEvent.needInform = 0;
   
@@ -287,6 +289,7 @@ void storeEventIfNeeded() {
     if (0==memcmp(events[i].id, curEvent.id, ID_SIZE)) {
       curEvent.didInform = events[i].didInform;
       storeEvent(i);
+      DEBUGMSG(String("match ")+i+" didInform "+events[i].didInform);
       return;
     }
   }
@@ -405,7 +408,7 @@ void updateBeeper() {
     if (pitch>0) {
       //tone(beeperPin, pitch);
       analogWriteFreq(pitch);
-      analogWrite(beeperPin, 128);
+      analogWrite(beeperPin, 512);
     }
     else {
       analogWrite(beeperPin, 0);
@@ -449,8 +452,10 @@ char buf[MAX_CHARS_PER_LINE+1];
 
 void updateInformation() {
   uint8_t informNeeded = 0;
-  for (int i=0; i<numEvents; i++)
+  for (int i=0; i<numEvents; i++) {
+    DEBUGMSG(String("inform ")+i+" "+events[i].needInform+" "+events[i].didInform);
     informNeeded |= events[i].needInform & ~events[i].didInform;
+  }
 
   if (noConnectionWarningLight)
     informNeeded |= INFORM_LIGHT;
@@ -476,8 +481,9 @@ void updateInformation() {
   else {
     stopBeeper();
   }
-  
-  //digitalWrite(ledPin, ledReverse^(numEvents>0 || informLight));
+
+  uint8_t ledState = numEvents>0 || informLight;
+  analogWrite(ledPin, ledReverse ? (1023-(ledState << 7)) : ( ledState << 7 ) );
   
   if (numEvents > numDataLines/2) {
     snprintf(buf, MAX_CHARS_PER_LINE, "+ %d more events", numEvents-numDataLines/2);
