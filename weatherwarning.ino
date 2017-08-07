@@ -6,7 +6,7 @@
 
 #include <TFT_eSPI.h> // https://github.com/Bodmer/TFT_eSPI
 
-#define DEBUG
+#undef DEBUG
 #undef OLD_API // TODO: Api changeover around September 2017
 #define LOCATION "TXZ159" //"TXZ159" // "TXZ159" 
 #define LOCATION_NAME "McLennan" // "McLennan" // "TEST" // "TEST" // 
