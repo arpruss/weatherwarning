@@ -6,9 +6,9 @@
 
 #include <TFT_eSPI.h> // https://github.com/Bodmer/TFT_eSPI
 
-#undef DEBUG
+//#define DEBUG
 #undef OLD_API // TODO: Api changeover around September 2017
-#define LOCATION "TXZ159" //"TXZ159" // "TXZ159" 
+#define LOCATION "TXC309" // "TXZ159" //"TXZ159" // "TXZ159" 
 #define LOCATION_NAME "McLennan" // "McLennan" // "TEST" // "TEST" // 
 #define TIMEZONE -6*60
 #define DST_ADJUST 1
@@ -86,6 +86,7 @@ char dataLines[numDataLines+2][MAX_CHARS_PER_LINE+1];
 #define STATUS_LINE2 (numDataLines+1)
 
 TFT_eSPI tft = TFT_eSPI();
+//WiFiDisplayClass tft;
 
 #define BEEPER_OFF -1
 
@@ -95,7 +96,7 @@ TFT_eSPI tft = TFT_eSPI();
 #define SSID_LENGTH 33
 #define PSK_LENGTH  64
 #if 1
-#include "c:/users/alexander_pruss/Documents/Arduino/private.h"
+#include "c:/users/alexander_pruss/Arduino/private.h"
 #else
 char ssid[SSID_LENGTH] = "SSID";
 char psk[PSK_LENGTH] = "password";
@@ -164,19 +165,14 @@ void setup() {
   delay(500);
   backlightState = 0;
   backlight(1);
-  
+
   tft.begin();
+  //tft.coordinates(screenHeight,screenWidth);
   tft.setRotation(1);
   tft.fillScreen(statusColors[0]);
   tft.setTextColor(statusColors[1]);
   tft.setCursor(0,0);
   tft.print("WeatherWarning for ESP8266");
-
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, psk);
-
-  while (WiFi.status() != WL_CONNECTED)
-    delay(500);
 
   tft.setCursor(0,dataFontLineHeight);
   tft.print(String("Connected to ")+String(ssid));
@@ -423,10 +419,12 @@ void updateBeeper() {
       //tone(beeperPin, pitch);
       analogWriteFreq(pitch);
       analogWrite(beeperPin, 512);
+      DEBUGMSG("beeper on");
     }
     else {
       analogWrite(beeperPin, 0);
       //noTone(beeperPin);
+      DEBUGMSG("beeper off");
     }
     toneStart = millis();
 }
@@ -578,14 +576,14 @@ void monitorWeather() {
   WiFiClientSecure client;
   displayLine(STATUS_LINE2, "Connecting...");
 #ifdef OLD_API  
-    if (client.connect("alerts.weather.gov", 443)) { // TXZ159=McLennan; AZZ015=Flagstaff, AZ
+    if (client.connect("alerts.weather.gov", 443)) { 
     client.print("GET /cap/wwaatmget.php?x=" LOCATION " HTTP/1.1\r\n"
       "Host: alerts.weather.gov\r\n"
       "User-Agent: weatherwarning-ESP8266\r\n"
       "Connection: close\r\n\r\n");  
 #else
-    if (client.connect("api.weather.gov", 443)) { // TXZ159=McLennan; AZZ015=Flagstaff, AZ
-    client.print("GET /alerts/active?zone=" LOCATION " HTTP/1.1\r\n"
+    if (client.connect("api.weather.gov", 443)) { 
+    client.print("GET /alerts/active/zone/" LOCATION " HTTP/1.1\r\n"
       "Host: api.weather.gov\r\n"
       "User-Agent: weatherwarning-ESP8266-arpruss@gmail.com\r\n"
       "Accept: application/atom+xml\r\n"
