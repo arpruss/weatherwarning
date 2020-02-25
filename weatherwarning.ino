@@ -290,7 +290,7 @@ void storeEventIfNeeded() {
     
   if (NULL != strstr(curEvent.event, "tornado") || curEvent.severity == 0)
     curEvent.needInform = INFORM_LIGHT | INFORM_SOUND;
-  else if (curEvent.severity == 1 || curEvent.severity == ARRAY_LEN(severityList) - 1 )
+  else if (NULL == strstr(curEvent.event, "child abduction") && ( curEvent.severity == 1 || curEvent.severity == ARRAY_LEN(severityList) - 1 ) )
     curEvent.needInform = INFORM_LIGHT; 
   else
     curEvent.needInform = 0;
@@ -449,13 +449,13 @@ char durationBuf[20];
 
 char* formatDuration(uint32_t t) {
   if (t < 1000ul*60*3) {
-    snprintf(durationBuf, 19, "%lds", (t/1000));
+    snprintf(durationBuf, 19, "%us", (t/1000));
   }
   else if (t < 1000ul*60*180) {
-    snprintf(durationBuf, 19, "%ldmin", (t/(1000ul*60)));
+    snprintf(durationBuf, 19, "%lumin", (t/(1000ul*60)));
   }
   else {
-    snprintf(durationBuf, 19, "%ldhrs", (t/(1000ul*60*60)));
+    snprintf(durationBuf, 19, "%luhrs", (t/(1000ul*60*60)));
   }
   return durationBuf;
 }
