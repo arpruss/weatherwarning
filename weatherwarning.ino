@@ -4,10 +4,15 @@
 #include <string.h>
 #include <ctype.h>
 
+// code review April 12, 2020:
+//   checked for(;;) loops for timely termination
+//   checked while loops for timely termination
+
 #include <TFT_eSPI.h> // https://github.com/Bodmer/TFT_eSPI
 
 //#define DEBUG
-#undef OLD_API // TODO: Api changeover around September 2017
+#undef OLD_API // TODO: Api changeover around September 2017? Still seems to work in April 2020, though.
+#define READ_TIMEOUT 10000  // milliseconds
 #define LOCATION "TXC309" // "TXZ159" //"TXZ159" // "TXZ159" 
 #define LOCATION_NAME "McLennan" // "McLennan" // "TEST" // "TEST" // 
 #define TIMEZONE -6*60
@@ -155,14 +160,15 @@ void setup() {
   lastUpdate = UNDEF_TIME;
   retry = 0;
 
-  pinMode(buttonPin, INPUT_PULLUP);
-  pinMode(beeperPin, OUTPUT);
   pinMode(ledPin, OUTPUT);
   digitalWrite(ledPin, ledReverse);
+  pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(beeperPin, OUTPUT);
   pinMode(backlightPin, OUTPUT);
   digitalWrite(backlightPin, 0);
 
-  delay(500);
+  //delay(1500);
+
   backlightState = 0;
   backlight(1);
 
@@ -175,8 +181,12 @@ void setup() {
   tft.print("WeatherWarning for ESP8266");
 
   tft.setCursor(0,dataFontLineHeight);
+  WiFi.begin(ssid, psk);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);    
+  }
   tft.print(String("Connected to ")+String(ssid));
-  delay(2500);
+  delay(1000);
   clearScreen();
   screenOffTimer = millis();
 
@@ -538,6 +548,10 @@ int eventCompare(const EventInfo* a, const EventInfo* b) {
 
 void sortEvents() {
   // https://en.wikipedia.org/wiki/Bubble_sort
+  // Bubble sort is inefficient, but since we never expect to go beyond n=6, it's
+  // fine, and we want a simpler algorithm so we can more easily verify that it
+  // is bug-free.
+  
   int n = numEvents;
   do {
     int newN = 0;
@@ -550,7 +564,7 @@ void sortEvents() {
       }
     }
     n = newN;
-  } while(n>0);
+  } while(n>0); //OK
 }
 
 uint32_t currentDelay() {
@@ -574,8 +588,10 @@ void failureUpdateCheck() {
 
 void monitorWeather() {
   WiFiClientSecure client;
+  //client.setTimeout(READ_TIMEOUT);
   displayLine(STATUS_LINE2, "Connecting...");
-#ifdef OLD_API  
+  uint32 t0 = millis();
+#ifdef OLD_API
     if (client.connect("alerts.weather.gov", 443)) { 
     client.print("GET /cap/wwaatmget.php?x=" LOCATION " HTTP/1.1\r\n"
       "Host: alerts.weather.gov\r\n"
@@ -590,20 +606,30 @@ void monitorWeather() {
       "Connection: close\r\n\r\n");  // TODO: alerts-v2??? */
 #endif      
     displayLine(STATUS_LINE2, "Loading...");
+    
     XML_reset();
-    while (client.connected()) {
-      String line = client.readStringUntil('\n');
-      DEBUGMSG(line);
-      if (String("\r") == line || String("") == line) // headers done
+    
+    while (client.connected()) { //OK
+      if ((uint32)(millis()-t0) >= READ_TIMEOUT) 
+        goto DONE;
+
+      if ('\n' == client.read())
         break;
+
+      ESP.wdtFeed();
     }
-    while (client.connected()) {
+    
+    ESP.wdtFeed();
+
+    while ((uint32)(millis()-t0) < READ_TIMEOUT && client.connected()) { //OK
       if (client.available()) {
         char c = client.read();
         xmlParseChar(c);
-        //Serial.write(c);
       }
+      ESP.wdtFeed();
     }
+
+DONE:
     client.stop();
     updateBeeper();
     yield();
@@ -670,7 +696,7 @@ void handleButton() {
     if ((uint32_t)(lastButtonDown - lastButtonUp) >= 3*1000ul) {
       startBeeper();
       digitalWrite(ledPin, !ledReverse);
-      while ((uint32_t)(millis() - lastButtonDown) < 10*1000ul) {
+      while ((uint32_t)(millis() - lastButtonDown) < 10*1000ul) { //OK
         yield();
         updateBeeper();
       }
