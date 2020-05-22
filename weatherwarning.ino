@@ -16,6 +16,7 @@ IPAddress subnet(255, 255, 255, 0);  //Subnet mask
 IPAddress dns(8,8,8,8);
 IPAddress dns2(8,8,4,4);
 
+#define DELETE_CHILD_ABDUCTION // weather only!
 //#define DEBUG
 #undef OLD_API // TODO: Api changeover around September 2017? Still seems to work in April 2020, though.
 #define READ_TIMEOUT 10000  // milliseconds
@@ -304,8 +305,10 @@ void storeEventIfNeeded() {
 
   curEvent.didInform = 0;
 
+#ifdef DELETE_CHILD_ABDUCTION  
   if (!strcmp(curEvent.event, "child abduction emergency"))
     return;
+#endif    
     
   if (NULL != strstr(curEvent.event, "tornado") || curEvent.severity == 0)
     curEvent.needInform = INFORM_LIGHT | INFORM_SOUND;
