@@ -10,6 +10,12 @@
 
 #include <TFT_eSPI.h> // https://github.com/Bodmer/TFT_eSPI
 
+IPAddress staticIP(192, 168, 1, 225); //ESP static ip
+IPAddress gateway(192, 168, 1, 1);   //IP Address of your WiFi Router (Gateway)
+IPAddress subnet(255, 255, 255, 0);  //Subnet mask
+IPAddress dns(8,8,8,8);
+IPAddress dns2(8,8,4,4);
+
 //#define DEBUG
 #undef OLD_API // TODO: Api changeover around September 2017? Still seems to work in April 2020, though.
 #define READ_TIMEOUT 10000  // milliseconds
@@ -17,7 +23,6 @@
 #define LOCATION_NAME "McLennan" // "McLennan" // "TEST" // "TEST" // 
 #define TIMEZONE -6*60
 #define DST_ADJUST 1
-
 
 #ifndef DEBUG
 # define DEBUGMSG(s) 
@@ -181,6 +186,7 @@ void setup() {
   tft.print("WeatherWarning for ESP8266");
 
   tft.setCursor(0,dataFontLineHeight);
+  WiFi.config(staticIP, gateway, subnet, dns, dns2);
   WiFi.begin(ssid, psk);
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);    
@@ -297,6 +303,9 @@ void storeEventIfNeeded() {
     return;
 
   curEvent.didInform = 0;
+
+  if (!strcmp(curEvent.event, "child abduction emergency"))
+    return;
     
   if (NULL != strstr(curEvent.event, "tornado") || curEvent.severity == 0)
     curEvent.needInform = INFORM_LIGHT | INFORM_SOUND;
