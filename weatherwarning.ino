@@ -20,6 +20,7 @@ IPAddress dns2(8,8,4,4);
 //#define DEBUG
 #undef OLD_API // TODO: Api changeover around September 2017? Still seems to work in April 2020, though.
 #define READ_TIMEOUT 10000  // milliseconds
+#define FAILURE_REBOOT_MILLIS (1000ul * 60 * 30) // 30 minutes
 #define LOCATION "TXC309" // "TXZ159" //"TXZ159" // "TXZ159" 
 #define LOCATION_NAME "McLennan" // "McLennan" // "TEST" // "TEST" // 
 #define TIMEZONE -6*60
@@ -675,6 +676,9 @@ DONE:
   
   failureUpdateCheck();
 
+  if (millis()-lastUpdateSuccess > FAILURE_REBOOT_MILLIS) 
+    ESP.restart();
+    
   updateInformation();
 }
 
