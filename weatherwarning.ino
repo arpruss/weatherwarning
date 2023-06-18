@@ -1,14 +1,18 @@
 #include <ESP8266WiFi.h>
+#include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include "quickparse.h"
 #include <string.h>
 #include <ctype.h>
 
+// notes from June 17-18, 2023:
+//   to connect to NWS servers, need a newish core, say 2.7.4 or later
+
 // code review April 12, 2020:
 //   checked for(;;) loops for timely termination
 //   checked while loops for timely termination
 
-#include <TFT_eSPI.h> // https://github.com/Bodmer/TFT_eSPI
+#include <TFT_eSPI.h> // https://github.com/Bodmer/TFT_eSPI , with a bit of local change
 
 IPAddress staticIP(192, 168, 1, 225); //ESP static ip
 IPAddress gateway(192, 168, 1, 1);   //IP Address of your WiFi Router (Gateway)
@@ -17,9 +21,14 @@ IPAddress dns(8,8,8,8);
 IPAddress dns2(8,8,4,4);
 
 #define DELETE_CHILD_ABDUCTION // weather only!
-//#define DEBUG
+#define UPGRADE_TORNADO_EVENTS
+#define DOWNGRADE_HEAT_EVENTS
+#define DEBUG
 #undef OLD_API // TODO: Api changeover around September 2017? Still seems to work in April 2020, though.
-#define READ_TIMEOUT 10000  // milliseconds
+                 
+#undef ALT_ADDRESS //"192.168.1.204" 
+#undef ALT_PORT // 8000
+#define READ_TIMEOUT 110000  // milliseconds : should be 10000: TODO
 #define FAILURE_REBOOT_MILLIS (1000ul * 60 * 30) // 30 minutes
 #define LOCATION "TXC309" // "TXZ159" //"TXZ159" // "TXZ159" 
 #define LOCATION_NAME "McLennan" // "McLennan" // "TEST" // "TEST" // 
@@ -28,8 +37,10 @@ IPAddress dns2(8,8,4,4);
 
 #ifndef DEBUG
 # define DEBUGMSG(s) 
+# define DEBUGMSG_CHAR(c)
 #else
 # define DEBUGMSG(s) Serial.println((s))
+# define DEBUGMSG_CHAR(c) Serial.write(c)
 #endif
 
 #define memzero(p,n) memset((p),0,(n))
@@ -311,9 +322,17 @@ void storeEventIfNeeded() {
     return;
 #endif    
     
-  if (NULL != strstr(curEvent.event, "tornado") || curEvent.severity == 0)
+  if (
+#ifdef UPGRADE_TORNADO_EVENTS    
+      NULL != strstr(curEvent.event, "tornado") || 
+#endif      
+      curEvent.severity == 0)
     curEvent.needInform = INFORM_LIGHT | INFORM_SOUND;
-  else if (NULL == strstr(curEvent.event, "child abduction") && ( curEvent.severity == 1 || curEvent.severity == ARRAY_LEN(severityList) - 1 ) )
+  else if (NULL == strstr(curEvent.event, "child abduction") && ( curEvent.severity == 1 || curEvent.severity == ARRAY_LEN(severityList) - 1 ) 
+#ifdef DOWNGRADE_HEAT_EVENTS  
+      && (NULL == strstr(curEvent.event, "excessive heat")) 
+#endif      
+      )
     curEvent.needInform = INFORM_LIGHT; 
   else
     curEvent.needInform = 0;
@@ -599,34 +618,66 @@ void failureUpdateCheck() {
   }
 }
 
+WiFiClientSecure secureClient;
+WiFiClient insecureClient;
+
 void monitorWeather() {
-  WiFiClientSecure client;
-  //client.setTimeout(READ_TIMEOUT);
   displayLine(STATUS_LINE2, "Connecting...");
   uint32 t0 = millis();
+
+  const char* address;
+  unsigned port;
+  const char* request;
+
+  bool success = false;
+
+  WiFiClient* client;
+
+#ifdef ALT_ADDRESS  
+  if (retry % 3 == 2) {
+      address = ALT_ADDRESS;
+      port = ALT_PORT;
+      request = "GET / HTTP/1.1\r\n"      
+        "Connection: close\r\n\r\n";
+      insecureClient.stop();
+      client = &insecureClient;
+  }
+  else 
+#endif  
+  {
 #ifdef OLD_API
-    if (client.connect("alerts.weather.gov", 443)) { 
-    client.print("GET /cap/wwaatmget.php?x=" LOCATION " HTTP/1.1\r\n"
+    address = "alerts.weather.gov";
+    port = 443;
+    request = "GET /cap/wwaatmget.php?x=" LOCATION " HTTP/1.1\r\n"
       "Host: alerts.weather.gov\r\n"
       "User-Agent: weatherwarning-ESP8266\r\n"
-      "Connection: close\r\n\r\n");  
+      "Connection: close\r\n\r\n";
 #else
-    if (client.connect("api.weather.gov", 443)) { 
-    client.print("GET /alerts/active/zone/" LOCATION " HTTP/1.1\r\n"
+    address = "api.weather.gov";
+    port = 443;
+    request = "GET /alerts/active/zone/" LOCATION " HTTP/1.1\r\n"
       "Host: api.weather.gov\r\n"
       "User-Agent: weatherwarning-ESP8266-arpruss@gmail.com\r\n"
       "Accept: application/atom+xml\r\n"
-      "Connection: close\r\n\r\n");  // TODO: alerts-v2??? */
+      "Connection: close\r\n\r\n";
 #endif      
+    secureClient.stop(); // just in case
+    secureClient.setInsecure();
+    client = &secureClient;
+  }
+  DEBUGMSG(address);
+  if (client->connect(address, port)) {
+    client->print(request);
+    
     displayLine(STATUS_LINE2, "Loading...");
     
     XML_reset();
     
-    while (client.connected()) { //OK
+    while (client->connected()) { 
       if ((uint32)(millis()-t0) >= READ_TIMEOUT) 
         goto DONE;
 
-      if ('\n' == client.read())
+      if ('\n' == client->read())
         break;
 
       ESP.wdtFeed();
@@ -634,16 +685,19 @@ void monitorWeather() {
     
     ESP.wdtFeed();
 
-    while ((uint32)(millis()-t0) < READ_TIMEOUT && client.connected()) { //OK
-      if (client.available()) {
-        char c = client.read();
-        xmlParseChar(c);
+    while ((uint32)(millis()-t0) < READ_TIMEOUT && (client->connected() || client->available())) { 
+      if (client->available()) {
+        char c = client->read();
+        //DEBUGMSG_CHAR(c);
+        xmlParseChar(c); 
+        //ESP.wdtFeed();
       }
-      ESP.wdtFeed();
     }
 
+    DEBUGMSG((uint32)(millis()-t0) < READ_TIMEOUT ? "on time" : "timeout");
+   
 DONE:
-    client.stop();
+    client->stop();
     updateBeeper();
     yield();
 
