@@ -8,6 +8,9 @@
 // notes from June 17-18, 2023:
 //   to connect to NWS servers, need a newish core, say 2.7.4 or later
 
+#define ANALOGWRITE_BEEPER
+#define ANALOGWRITE_BITS 8 // as of 3.0.0; before that, was 10
+
 // code review April 12, 2020:
 //   checked for(;;) loops for timely termination
 //   checked while loops for timely termination
@@ -23,6 +26,7 @@ IPAddress dns2(8,8,4,4);
 #define DELETE_CHILD_ABDUCTION // weather only!
 #define UPGRADE_TORNADO_EVENTS
 #define DOWNGRADE_HEAT_EVENTS
+#define DOWNGRADE_FLOOD_WATCH
 #define DEBUG
 #undef OLD_API // TODO: Api changeover around September 2017? Still seems to work in April 2020, though.
                  
@@ -332,6 +336,9 @@ void storeEventIfNeeded() {
 #ifdef DOWNGRADE_HEAT_EVENTS  
       && (NULL == strstr(curEvent.event, "excessive heat")) 
 #endif      
+#ifdef DOWNGRADE_FLOOD_WATCH
+      && (NULL == strstr(curEvent.event, "flood watch")) 
+#endif      
       )
     curEvent.needInform = INFORM_LIGHT; 
   else
@@ -458,14 +465,20 @@ void updateBeeper() {
   
     int pitch = beeperTones[beeperState][0];
     if (pitch>0) {
-      //tone(beeperPin, pitch);
+#ifdef ANALOGWRITE_BEEPER      
       analogWriteFreq(pitch);
-      analogWrite(beeperPin, 512);
+      analogWrite(beeperPin, 1<<(ANALOGWRITE_BITS-1));
+#else      
+      tone(beeperPin, pitch);
+#endif      
       DEBUGMSG("beeper on");
     }
     else {
+#ifdef ANALOGWRITE_BEEPER      
       analogWrite(beeperPin, 0);
-      //noTone(beeperPin);
+#else      
+      noTone(beeperPin);
+#endif     
       DEBUGMSG("beeper off");
     }
     toneStart = millis();
@@ -482,8 +495,11 @@ void startBeeper() {
 void stopBeeper() {
   if (beeperState != BEEPER_OFF) {
     beeperState = BEEPER_OFF;
-    //noTone(beeperPin);
+#ifdef ANALOGWRITE_BEEPER    
     analogWrite(beeperPin, 0);
+#else    
+    noTone(beeperPin);
+#endif    
   }
 }
 
@@ -507,7 +523,7 @@ char buf[MAX_CHARS_PER_LINE+1];
 void updateInformation() {
   uint8_t informNeeded = 0;
   for (int i=0; i<numEvents; i++) {
-    DEBUGMSG(String("inform ")+i+" "+events[i].needInform+" "+events[i].didInform);
+//    DEBUGMSG(String("inform ")+i+" "+events[i].needInform+" "+events[i].didInform);
     informNeeded |= events[i].needInform & ~events[i].didInform;
   }
 
@@ -537,7 +553,8 @@ void updateInformation() {
   }
 
   uint8_t ledState = numEvents>0 || informLight;
-  analogWrite(ledPin, ledReverse ? (1023-(ledState << 7)) : ( ledState << 7 ) );
+//  DEBUGMSG(String("LED ")+ledState);
+  analogWrite(ledPin, (ledReverse ? (1023-(ledState << 7)) : ( ledState << 7 )) >> (10-ANALOGWRITE_BITS) );
   
   if (numEvents > numDataLines/2) {
     snprintf(buf, MAX_CHARS_PER_LINE, "+ %d more events", numEvents-numDataLines/2);
@@ -801,4 +818,3 @@ void loop() {
   }
   yield();
 }
-
